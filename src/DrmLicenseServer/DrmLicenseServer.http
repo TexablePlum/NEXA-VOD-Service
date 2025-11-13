@@ -1,0 +1,6 @@
+@DrmLicenseServer_HostAddress = http://localhost:5093
+
+GET {{DrmLicenseServer_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

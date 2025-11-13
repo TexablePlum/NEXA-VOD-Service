@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: nexa-postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nexa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexa-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - nexa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  drm-server:
+    build:
+      context: .
+      dockerfile: src/DrmLicenseServer/Dockerfile
+    container_name: nexa-drm-server
+    env_file:
+      - .env
+    ports:
+      - "5001:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      - JWT__Secret=${JWT_SECRET}
+      - JWT__Issuer=${JWT_ISSUER}
+      - JWT__Audience=${JWT_AUDIENCE}
+      - MasterEncryptionKey=${MASTER_ENCRYPTION_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - nexa-network
+    volumes:
+      - ./data:/app/data
+
+  content-server:
+    build:
+      context: .
+      dockerfile: src/ContentServer/Dockerfile
+    container_name: nexa-content-server
+    env_file:
+      - .env
+    ports:
+      - "5002:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD:-}
+      - ContentStorage__BasePath=/app/content
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - nexa-network
+    volumes:
+      - ./content/storage:/app/content
+
+networks:
+  nexa-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
