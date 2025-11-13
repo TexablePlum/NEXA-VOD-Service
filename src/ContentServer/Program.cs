@@ -1,5 +1,7 @@
+using Nexa.ContentServer.HealthChecks;
 using Nexa.ContentServer.Middleware;
 using Nexa.ContentServer.Services;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,21 +28,8 @@ builder.Services.AddCors(options =>
 builder.Services.AddHealthChecks()
     .AddCheck("self", () =>
         Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("ContentServer is running"))
-    .AddCheck("storage", () =>
-    {
-        // SprawdŸ czy folder storage istnieje
-        var storagePath = builder.Configuration["ContentStorage:BasePath"] ?? "./content/storage";
-        var fullPath = Path.GetFullPath(storagePath);
-
-        if (Directory.Exists(fullPath))
-        {
-            return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy(
-                $"Storage accessible at {fullPath}");
-        }
-
-        return Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Unhealthy(
-            $"Storage not found at {fullPath}");
-    });
+    .AddCheck<StorageHealthCheck>("storage")
+    .AddCheck<RedisHealthCheck>("redis");
 
 // Pobiera œcie¿kê z appsettings.json
 var storagePath = builder.Configuration["ContentStorage:BasePath"] ?? "./content/storage";
@@ -49,11 +38,18 @@ var storagePath = builder.Configuration["ContentStorage:BasePath"] ?? "./content
 builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(sp =>
 {
     var redisConfig = builder.Configuration["Redis:ConnectionString"];
+
     if (string.IsNullOrEmpty(redisConfig))
     {
         throw new InvalidOperationException("Redis ConnectionString not found in configuration (Redis:ConnectionString)");
     }
-    return StackExchange.Redis.ConnectionMultiplexer.Connect(redisConfig);
+
+    var configOptions = ConfigurationOptions.Parse(redisConfig);
+    configOptions.ConnectTimeout = 5000;
+    configOptions.SyncTimeout = 5000;
+    configOptions.AbortOnConnectFail = false;
+
+    return ConnectionMultiplexer.Connect(configOptions);
 });
 
 // Rejestracja CatalogService

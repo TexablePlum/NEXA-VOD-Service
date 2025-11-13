@@ -47,7 +47,7 @@ content/storage/*
 *.db-wal
 
 # Sensitive data
-appsettings.Production.json
+appsettings.Development.json
 *.pfx
 *.key
 
@@ -64,3 +64,5 @@ tools/ffmpeg/
 
 # Documentation folder
 docs/
+
+src/TestWebPlayer
