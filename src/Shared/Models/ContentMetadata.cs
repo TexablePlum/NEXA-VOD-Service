@@ -24,7 +24,7 @@
         /// <summary>
         /// Długość filmu w SEKUNDACH
         /// </summary>
-        public int DurationSeconds { get; set; }
+        public double DurationSeconds { get; set; }
 
         /// <summary>
         /// Jaki plan subskrypcji jest wymagany?

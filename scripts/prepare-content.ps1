@@ -23,7 +23,17 @@ param(
     [string[]]$Qualities = @('480p', '720p'),
     
     [Parameter()]
-    [switch]$SkipEncryption
+    [switch]$SkipEncryption,
+
+    [Parameter()]
+    [string]$Description = "Brak opisu.", 
+
+    [Parameter()]
+    [string]$ReleaseDate = $null,
+
+    [Parameter()]
+    [ValidateSet('free', 'basic', 'pro')]
+    [string]$RequiredPlan = 'free'
 )
 
 $ErrorActionPreference = "Stop"
@@ -322,12 +332,16 @@ function New-Metadata {
     $metadata = @{
         ContentId = $ContentId
         Title = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
-        Duration = $VideoInfo.Duration
+        DurationSeconds = $VideoInfo.Duration
         AvailableQualities = $AvailableQualities
         SourceResolution = "$($VideoInfo.Width)x$($VideoInfo.Height)"
         CreatedAt = (Get-Date -Format "o")
         ManifestUrl = "/content/$ContentId/manifest.mpd"
         ThumbnailUrl = "/content/$ContentId/thumbnail.jpg"
+        
+        Description = $Description
+        ReleaseDate = $ReleaseDate
+        RequiredPlan = $RequiredPlan
     }
     
     $metaFile = Join-Path $OutputDir "metadata.json"
