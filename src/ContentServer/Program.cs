@@ -18,7 +18,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("NexaClientPolicy", policy =>
     {
         policy
-            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (MVP - póŸniej zmienimy)
+            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (MVP - pï¿½niej zmienimy)
             .AllowAnyMethod()       // Zezwalaj GET, POST, PUT, DELETE, etc.
             .AllowAnyHeader();      // Zezwalaj dowolne headers (Authorization, Content-Type, etc.)
     });
@@ -31,7 +31,7 @@ builder.Services.AddHealthChecks()
     .AddCheck<StorageHealthCheck>("storage")
     .AddCheck<RedisHealthCheck>("redis");
 
-// Pobiera œcie¿kê z appsettings.json
+// Pobiera Å›cieÅ¼kÄ™ z appsettings.json
 var storagePath = builder.Configuration["ContentStorage:BasePath"] ?? "./content/storage";
 
 // Rejestracja StackExchange.Redis
@@ -47,7 +47,7 @@ builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(sp =>
     var configOptions = ConfigurationOptions.Parse(redisConfig);
     configOptions.ConnectTimeout = 5000;
     configOptions.SyncTimeout = 5000;
-    configOptions.AbortOnConnectFail = false;
+    configOptions.AbortOnConnectFail = true;
 
     return ConnectionMultiplexer.Connect(configOptions);
 });
@@ -56,16 +56,18 @@ builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(sp =>
 builder.Services.AddSingleton<CatalogService>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<CatalogService>>();
-
-    // Pobiera bazê Redis
     var redisMultiplexer = sp.GetRequiredService<StackExchange.Redis.IConnectionMultiplexer>();
     var redisDb = redisMultiplexer.GetDatabase();
 
-    // Pobiera czas trwania cache z konfiguracji (domyœlnie 1h)
     var cacheDurationSeconds = builder.Configuration.GetValue<int?>("ContentStorage:CacheDurationSeconds") ?? 3600;
     var cacheDuration = TimeSpan.FromSeconds(cacheDurationSeconds);
 
-    return new CatalogService(storagePath, logger, redisDb, cacheDuration);
+    var service = new CatalogService(storagePath, logger, redisDb, cacheDuration);
+
+    var lifetime = sp.GetRequiredService<IHostApplicationLifetime>();
+    lifetime.ApplicationStopping.Register(() => service.Dispose());
+
+    return service;
 });
 
 // Rejestracja StreamingService
@@ -77,7 +79,7 @@ builder.Services.AddSingleton<StreamingService>(sp =>
 
 var app = builder.Build();
 
-// Middleware obs³ugi b³êdów
+// Middleware obsï¿½ugi bï¿½ï¿½dï¿½w
 app.UseMiddleware<ErrorHandlingMiddleware>();
 
 // Swagger tylko w Development

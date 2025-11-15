@@ -36,7 +36,8 @@ namespace Nexa.ContentServer.Controllers
         public async Task<ActionResult<CatalogResponse>> GetCatalog(
             [FromQuery] int limit = 50,
             [FromQuery] int offset = 0,
-            [FromQuery] string? search = null)
+            [FromQuery] string? search = null,
+            CancellationToken cancellationToken = default)
         {
             // Walidacja parametrów
             if (limit < 1) limit = 50;
@@ -44,7 +45,7 @@ namespace Nexa.ContentServer.Controllers
             if (offset < 0) offset = 0;
 
             // Pobiera wszystkie filmy
-            var allContent = await _catalogService.GetAllContentAsync();
+            var allContent = await _catalogService.GetAllContentAsync(cancellationToken);
 
             // Opcjonalne filtrowanie po tytule
             if (!string.IsNullOrWhiteSpace(search))
@@ -81,9 +82,9 @@ namespace Nexa.ContentServer.Controllers
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
-        public async Task<ActionResult<ContentMetadata>> GetContentById(string id)
+        public async Task<ActionResult<ContentMetadata>> GetContentById(string id, CancellationToken cancellationToken = default)
         {
-            var content = await _catalogService.GetContentByIdAsync(id);
+            var content = await _catalogService.GetContentByIdAsync(id, cancellationToken);
             return Ok(content);
         }
     }

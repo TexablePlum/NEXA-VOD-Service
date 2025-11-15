@@ -24,12 +24,21 @@ namespace Nexa.ContentServer.Services
         /// </summary>
         public string GetManifestPath(string contentId)
         {
-            if (string.IsNullOrWhiteSpace(contentId))
+            if (string.IsNullOrWhiteSpace(contentId) || contentId.Contains(".."))
             {
-                throw new ValidationException("Content ID cannot be empty");
+                throw new ValidationException("Invalid content ID");
             }
 
             var manifestPath = Path.Combine(_basePath, contentId, "manifest.mpd");
+
+            var fullBasePath = Path.GetFullPath(_basePath);
+            var fullManifestPath = Path.GetFullPath(manifestPath);
+
+            if (!fullManifestPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Path traversal attempt blocked for manifest: {ContentId}", contentId);
+                throw new ValidationException("Invalid content ID");
+            }
 
             if (!File.Exists(manifestPath))
             {
@@ -128,12 +137,21 @@ namespace Nexa.ContentServer.Services
         /// </summary>
         public string GetThumbnailPath(string contentId)
         {
-            if (string.IsNullOrWhiteSpace(contentId))
+            if (string.IsNullOrWhiteSpace(contentId) || contentId.Contains(".."))
             {
-                throw new ValidationException("Content ID cannot be empty");
+                throw new ValidationException("Invalid content ID");
             }
 
             var thumbnailPath = Path.Combine(_basePath, contentId, "thumbnail.jpg");
+
+            var fullBasePath = Path.GetFullPath(_basePath);
+            var fullThumbnailPath = Path.GetFullPath(thumbnailPath);
+
+            if (!fullThumbnailPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Path traversal attempt blocked for thumbnail: {ContentId}", contentId);
+                throw new ValidationException("Invalid content ID");
+            }
 
             if (!File.Exists(thumbnailPath))
             {
