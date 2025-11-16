@@ -19,7 +19,7 @@ namespace Nexa.ContentServer.Services
         private readonly TimeSpan _cacheDuration;
         private readonly FileSystemWatcher _watcher;
 
-        private const string CacheKeyAllContent = "catalog:all";
+        private const string CacheKeyContentIds = "catalog:ids";
         private string GetCacheKeyForContent(string contentId) => $"catalog:id:{contentId}";
         private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -37,38 +37,163 @@ namespace Nexa.ContentServer.Services
                 EnableRaisingEvents = true
             };
 
-            _watcher.Created += (s, e) => InvalidateCache("File created: " + e.Name);
-            _watcher.Deleted += (s, e) => InvalidateCache("File deleted: " + e.Name);
-            _watcher.Changed += (s, e) => InvalidateCache("File changed: " + e.Name);
-            _watcher.Renamed += (s, e) => InvalidateCache("File renamed: " + e.Name);
+            _watcher.Created += OnFileSystemChanged;
+            _watcher.Deleted += OnFileSystemChanged;
+            _watcher.Changed += OnFileSystemChanged;
+            _watcher.Renamed += (s, e) => OnFileSystemChanged(s, e);
         }
 
         /// <summary>
-        /// Pobiera listę wszystkich filmów z folderu storage.
-        /// Najpierw sprawdza cache w Redis, jeśli nie ma to czyta dane z dysku.
+        /// Obsługuje zmiany w file system - invaliduje cache tylko dla istotnych zmian.
+        /// Ignoruje zmiany w plikach .m4s, .key, itp. - tylko metadata.json i foldery contentów.
         /// </summary>
-        public async Task<List<ContentMetadata>> GetAllContentAsync(CancellationToken cancellationToken = default)
+        private void OnFileSystemChanged(object sender, FileSystemEventArgs e)
         {
-            var cachedData = await _redisDb.StringGetAsync(CacheKeyAllContent);
-            if (cachedData.HasValue)
+            var fileName = Path.GetFileName(e.FullPath);
+
+            // Invaliduje cache tylko gdy:
+            // 1. Zmieniono/dodano/usunięto metadata.json
+            // 2. Dodano/usunięto folder contentu
+            if (fileName == "metadata.json" ||
+                Path.GetDirectoryName(e.FullPath) == Path.GetFullPath(_basePath))
             {
-                _logger.LogInformation("Cache HIT for key: {CacheKey}", CacheKeyAllContent);
-                var cachedList = JsonSerializer.Deserialize<List<ContentMetadata>>(cachedData.ToString()!, _jsonOptions);
-                if (cachedList != null)
-                {
-                    return cachedList;
-                }
+                InvalidateCache($"{e.ChangeType}: {e.Name}");
+            }
+            else
+            {
+                // Ignoruje zmiany w segmentach wideo, miniaturach, etc.
+                _logger.LogDebug("Ignoring file system change: {ChangeType} {Name}", e.ChangeType, e.Name);
+            }
+        }
+
+        /// <summary>
+        /// Pobiera listę filmów z folderu storage z paginacją i opcjonalnym wyszukiwaniem.
+        /// cache-uje listę ID, zastosowuje paginację na ID (jeśli brak search),
+        /// a następnie pobiera tylko potrzebne treści (z cache lub dysku).
+        /// </summary>
+        public async Task<List<ContentMetadata>> GetAllContentAsync(
+            int limit,
+            int offset,
+            string? search = null,
+            CancellationToken cancellationToken = default)
+        {
+            // Pobiera listę wszystkich ContentId
+            var allContentIds = await GetContentIdsAsync(cancellationToken);
+
+            // Jeśli nie użyto search
+            if (string.IsNullOrWhiteSpace(search))
+            {
+                var paginatedIds = allContentIds
+                    .Skip(offset)
+                    .Take(limit)
+                    .ToList();
+
+                _logger.LogInformation("Loading {Count} content items (out of {Total}) with pagination, no search",
+                    paginatedIds.Count, allContentIds.Count);
+
+                return await LoadContentsByIdsAsync(paginatedIds, cancellationToken);
             }
 
-            _logger.LogInformation("Cache MISS for key: {CacheKey}. Fetching from disk.", CacheKeyAllContent);
+            // Jeśli użyto search ładuje wszytsko, filtruje, potem paginuje
+            _logger.LogInformation("Loading all {Count} content items for search filtering", allContentIds.Count);
 
-            var contentList = await FetchAllContentFromDiskAsync(cancellationToken);
+            var allContent = await LoadContentsByIdsAsync(allContentIds, cancellationToken);
 
-            var serializedData = JsonSerializer.Serialize(contentList);
-            await _redisDb.StringSetAsync(CacheKeyAllContent, serializedData, _cacheDuration);
-            _logger.LogInformation("Stored {Count} items in cache for key: {CacheKey}", contentList.Count, CacheKeyAllContent);
+            var filteredContent = allContent
+                .Where(c => c.Title.Contains(search, StringComparison.OrdinalIgnoreCase))
+                .Skip(offset)
+                .Take(limit)
+                .ToList();
 
-            return contentList;
+            _logger.LogInformation("Returned {Count} content items after search filter for '{Search}'",
+                filteredContent.Count, search);
+
+            return filteredContent;
+        }
+
+        /// <summary>
+        /// Pobiera total count wszystkich filmów (z opcjonalnym filtrem search).
+        /// </summary>
+        public async Task<int> GetTotalCountAsync(string? search = null, CancellationToken cancellationToken = default)
+        {
+            var allContentIds = await GetContentIdsAsync(cancellationToken);
+
+            // Jeśli brak search, zwróć count IDs
+            if (string.IsNullOrWhiteSpace(search))
+            {
+                return allContentIds.Count;
+            }
+
+            // Jeśli jest search, musimy załadować wszystkie i przefiltrować
+            var allContent = await LoadContentsByIdsAsync(allContentIds, cancellationToken);
+
+            var filteredCount = allContent
+                .Count(c => c.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
+
+            return filteredCount;
+        }
+
+        /// <summary>
+        /// Pobiera listę wszystkich ContentId z cache lub dysku.
+        /// </summary>
+        private async Task<List<string>> GetContentIdsAsync(CancellationToken cancellationToken)
+        {
+            // Sprawdź cache dla listy ContentIds
+            var cachedIds = await _redisDb.StringGetAsync(CacheKeyContentIds);
+
+            if (cachedIds.HasValue)
+            {
+                _logger.LogInformation("Cache HIT for content IDs list");
+                var idsList = JsonSerializer.Deserialize<List<string>>(cachedIds.ToString()!, _jsonOptions);
+                return idsList ?? new List<string>();
+            }
+
+            _logger.LogInformation("Cache MISS for content IDs. Scanning storage directories.");
+
+            // Pobiera listę folderów (każdy folder to ContentId)
+            if (!Directory.Exists(_basePath))
+            {
+                _logger.LogError("Storage path does not exist: {Path}", _basePath);
+                throw new StorageUnavailableException(_basePath);
+            }
+
+            var contentDirectories = Directory.GetDirectories(_basePath);
+            var contentIds = contentDirectories
+                .Select(Path.GetFileName)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .Cast<string>()
+                .ToList();
+
+            // Cacheuje listę ID
+            var serializedIds = JsonSerializer.Serialize(contentIds);
+            await _redisDb.StringSetAsync(CacheKeyContentIds, serializedIds, _cacheDuration);
+            _logger.LogInformation("Cached {Count} content IDs", contentIds.Count);
+
+            return contentIds;
+        }
+
+        /// <summary>
+        /// Ładuje contenty dla podanych ID (z cache lub dysku).
+        /// </summary>
+        private async Task<List<ContentMetadata>> LoadContentsByIdsAsync(
+            List<string> contentIds,
+            CancellationToken cancellationToken)
+        {
+            var loadTasks = contentIds.Select(async contentId =>
+            {
+                try
+                {
+                    return await GetContentByIdAsync(contentId, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to load content {ContentId}", contentId);
+                    return null;
+                }
+            });
+
+            var results = await Task.WhenAll(loadTasks);
+            return results.Where(m => m != null).Cast<ContentMetadata>().ToList();
         }
 
         /// <summary>
@@ -80,6 +205,13 @@ namespace Nexa.ContentServer.Services
             if (string.IsNullOrWhiteSpace(contentId))
             {
                 throw new ValidationException("Content ID cannot be empty");
+            }
+
+            // Path traversal protection tak samo jak w StreamingService
+            if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
+            {
+                _logger.LogWarning("Path traversal attempt blocked in catalog: {ContentId}", contentId);
+                throw new ValidationException("Invalid content ID format");
             }
 
             var cacheKey = GetCacheKeyForContent(contentId);
@@ -109,64 +241,34 @@ namespace Nexa.ContentServer.Services
         private void InvalidateCache(string reason)
         {
             _logger.LogInformation("Invalidating cache. Reason: {Reason}", reason);
-            _redisDb.KeyDelete(CacheKeyAllContent);
-        }
 
-        private async Task<List<ContentMetadata>> FetchAllContentFromDiskAsync(CancellationToken cancellationToken)
-        {
-            if (!Directory.Exists(_basePath))
+            // Kasuje listę ContentId
+            _redisDb.KeyDelete(CacheKeyContentIds);
+
+            // Kasuje wszystkie indywidualne cacheowane contenty
+            var server = _redisDb.Multiplexer.GetServer(_redisDb.Multiplexer.GetEndPoints().First());
+            var keys = server.Keys(pattern: "catalog:id:*").ToArray();
+
+            if (keys.Length > 0)
             {
-                _logger.LogError("Storage path does not exist: {Path}", _basePath);
-                throw new StorageUnavailableException(_basePath);
-            }
-
-            try
-            {
-                var contentDirectories = Directory.GetDirectories(_basePath);
-
-                var loadTasks = contentDirectories.Select(async contentDir =>
-                {
-                    var metadataPath = Path.Combine(contentDir, "metadata.json");
-
-                    if (!File.Exists(metadataPath))
-                    {
-                        _logger.LogWarning("Metadata not found for content: {Dir}", contentDir);
-                        return null;
-                    }
-
-                    try
-                    {
-                        var jsonContent = await File.ReadAllTextAsync(metadataPath, cancellationToken);
-                        return JsonSerializer.Deserialize<ContentMetadata>(jsonContent, _jsonOptions);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to parse metadata.json in {Dir}", contentDir);
-                        return null;
-                    }
-                });
-
-                var results = await Task.WhenAll(loadTasks);
-                var contentList = results.Where(m => m != null).Cast<ContentMetadata>().ToList();
-
-                _logger.LogInformation("Loaded {Count} content items from storage (disk)", contentList.Count);
-
-                return contentList;
-            }
-            catch (StorageUnavailableException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error loading content catalog from disk");
-                throw;
+                _redisDb.KeyDelete(keys);
+                _logger.LogInformation("Invalidated {Count} individual content cache entries", keys.Length);
             }
         }
 
         private async Task<ContentMetadata> FetchContentByIdFromDiskAsync(string contentId, CancellationToken cancellationToken)
         {
             var metadataPath = Path.Combine(_basePath, contentId, "metadata.json");
+
+            // Dodatkowa weryfikacja path traversal na poziomie fizycznego dostępu
+            var fullBasePath = Path.GetFullPath(_basePath);
+            var fullMetadataPath = Path.GetFullPath(metadataPath);
+
+            if (!fullMetadataPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("Path traversal attack detected in catalog: {ContentId}", contentId);
+                throw new ContentNotFoundException(contentId);
+            }
 
             if (!File.Exists(metadataPath))
             {

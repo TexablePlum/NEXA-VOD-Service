@@ -24,7 +24,8 @@ namespace Nexa.ContentServer.Controllers
 
         /// <summary>
         /// GET /api/catalog
-        /// Zwraca listę wszystkich dostępnych filmów.
+        /// Zwraca listę dostępnych filmów z paginacją i opcjonalnym wyszukiwaniem.
+        /// Optymalizacja: ładuje tylko potrzebne filmy (limit), nie wszystkie.
         /// </summary>
         /// <param name="limit">Maksymalna liczba wyników (default: 50, max: 100)</param>
         /// <param name="offset">Offset dla paginacji (default: 0)</param>
@@ -44,23 +45,11 @@ namespace Nexa.ContentServer.Controllers
             if (limit > 100) limit = 100;
             if (offset < 0) offset = 0;
 
-            // Pobiera wszystkie filmy
-            var allContent = await _catalogService.GetAllContentAsync(cancellationToken);
+            // Pobiera total count (nie ładuje wszystkich obiektów jeśli brak search)
+            var total = await _catalogService.GetTotalCountAsync(search, cancellationToken);
 
-            // Opcjonalne filtrowanie po tytule
-            if (!string.IsNullOrWhiteSpace(search))
-            {
-                allContent = allContent
-                    .Where(c => c.Title.Contains(search, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
-
-            // Paginacja
-            var total = allContent.Count;
-            var items = allContent
-                .Skip(offset)
-                .Take(limit)
-                .ToList();
+            // Pobiera tylko potrzebne filmy (limit) z paginacją i searchem
+            var items = await _catalogService.GetAllContentAsync(limit, offset, search, cancellationToken);
 
             var response = new CatalogResponse
             {

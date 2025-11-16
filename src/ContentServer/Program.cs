@@ -1,3 +1,4 @@
+using AspNetCoreRateLimit;
 using Nexa.ContentServer.HealthChecks;
 using Nexa.ContentServer.Middleware;
 using Nexa.ContentServer.Services;
@@ -7,6 +8,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Kontrolery
 builder.Services.AddControllers();
+
+// Rate Limiting
+builder.Services.AddMemoryCache();
+builder.Services.Configure<IpRateLimitOptions>(builder.Configuration.GetSection("IpRateLimiting"));
+builder.Services.AddSingleton<IIpPolicyStore, MemoryCacheIpPolicyStore>();
+builder.Services.AddSingleton<IRateLimitCounterStore, MemoryCacheRateLimitCounterStore>();
+builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
+builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
+builder.Services.AddInMemoryRateLimiting();
 
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -18,7 +28,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("NexaClientPolicy", policy =>
     {
         policy
-            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (MVP - p�niej zmienimy)
+            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (MVP - później zmienimy)
             .AllowAnyMethod()       // Zezwalaj GET, POST, PUT, DELETE, etc.
             .AllowAnyHeader();      // Zezwalaj dowolne headers (Authorization, Content-Type, etc.)
     });
@@ -79,8 +89,11 @@ builder.Services.AddSingleton<StreamingService>(sp =>
 
 var app = builder.Build();
 
-// Middleware obs�ugi b��d�w
+// Middleware obsługi błędów
 app.UseMiddleware<ErrorHandlingMiddleware>();
+
+// Rate Limiting
+app.UseIpRateLimiting();
 
 // Swagger tylko w Development
 if (app.Environment.IsDevelopment())
@@ -89,6 +102,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Dla Dockera lepiej nie używać
 // app.UseHttpsRedirection();
 
 // CORS
