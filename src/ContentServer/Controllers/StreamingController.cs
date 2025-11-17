@@ -27,8 +27,10 @@ namespace Nexa.ContentServer.Controllers
         /// <summary>
         /// GET /content/{id}/manifest.mpd
         /// Zwraca manifest MPEG-DASH dla filmu.
+        /// Manifesty mogą się zmieniać, więc krótki cache.
         /// </summary>
         [HttpGet("{contentId}/manifest.mpd")]
+        [Microsoft.AspNetCore.OutputCaching.OutputCache(Duration = 300)] // 5 minut
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
@@ -46,7 +48,9 @@ namespace Nexa.ContentServer.Controllers
 
         /// <summary>
         /// GET /content/{id}/{quality}/segment_{n}.m4s
-        /// Zwraca zaszyfrowany segment wideo lub audio
+        /// Zwraca zaszyfrowany segment wideo lub audio.
+        /// Output Cache: Tylko dla init segments (małe, ~1-2KB) - 24h cache.
+        /// Duże segmenty wideo NIE są cacheowane.
         /// </summary>
         [HttpGet("{contentId}/{quality}/{segmentName}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
@@ -57,8 +61,18 @@ namespace Nexa.ContentServer.Controllers
         {
             var segmentPath = _streamingService.GetSegmentPath(contentId, quality, segmentName);
             var mimeType = _streamingService.GetMimeTypeForSegment(segmentName);
-            
-            _logger.LogInformation("Serving segment {SegmentName} with type {MimeType}", segmentName, mimeType);
+
+            // Log tylko init segments
+            if (segmentName.StartsWith("init_"))
+            {
+                _logger.LogDebug("Serving init segment {SegmentName} with type {MimeType}", segmentName, mimeType);
+            }
+
+            // Output Cache tylko dla init segments
+            if (segmentName.StartsWith("init_"))
+            {
+                HttpContext.Response.Headers.CacheControl = "public, max-age=86400, immutable";
+            }
 
             return PhysicalFile(
                 Path.GetFullPath(segmentPath),
@@ -70,8 +84,10 @@ namespace Nexa.ContentServer.Controllers
         /// <summary>
         /// GET /content/{id}/thumbnail.jpg
         /// Zwraca miniaturkę filmu.
+        /// Output Cache: 1h.
         /// </summary>
         [HttpGet("{contentId}/thumbnail.jpg")]
+        [Microsoft.AspNetCore.OutputCaching.OutputCache(Duration = 3600)] // 1 godzina
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]

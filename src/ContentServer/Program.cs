@@ -3,6 +3,9 @@ using Nexa.ContentServer.HealthChecks;
 using Nexa.ContentServer.Middleware;
 using Nexa.ContentServer.Services;
 using StackExchange.Redis;
+using Microsoft.AspNetCore.ResponseCompression;
+using System.IO.Compression;
+using Microsoft.AspNetCore.OutputCaching;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,6 +20,64 @@ builder.Services.AddSingleton<IRateLimitCounterStore, MemoryCacheRateLimitCounte
 builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
 builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
 builder.Services.AddInMemoryRateLimiting();
+
+// Response Compression (Gzip/Brotli dla JSON)
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+
+    // Kompresuje tylko JSON (nie kompresuje video/audio/images z definicji są już skompresowane)
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[]
+    {
+        "application/json",
+        "application/dash+xml"  // MPD manifest
+    });
+});
+
+// Konfiguruje poziomy kompresji
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = CompressionLevel.Fastest;
+});
+
+// Output Caching (cache gotowych HTTP responses)
+builder.Services.AddOutputCache(options =>
+{
+    // Polityka dla catalog API - cache z możliwością iwalidacji
+    options.AddPolicy("CatalogCache", builder =>
+    {
+        builder
+            .Expire(TimeSpan.FromMinutes(5))  // 5 minut domyślnie
+            .SetVaryByQuery("limit", "offset", "search")  // Różne cache w zależności od parametru zapytania
+            .Tag("catalog");  // Tag do inwalidacji
+    });
+
+    // Polityka dla pojedynczego contentu
+    options.AddPolicy("ContentCache", builder =>
+    {
+        builder
+            .Expire(TimeSpan.FromMinutes(5))
+            .Tag("catalog");  // Inwalidacja razem z katalogiem
+    });
+
+    // Polityka dla segmentów inicjalizacyjnych (małe, często używane)
+    options.AddPolicy("InitSegmentCache", builder =>
+    {
+        builder
+            .Expire(TimeSpan.FromHours(24))  // 24h
+            .SetVaryByQuery("*");
+    });
+
+    // Limit rozmiaru cache (100 MB max)
+    options.SizeLimit = 100 * 1024 * 1024;
+});
 
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
@@ -72,7 +133,10 @@ builder.Services.AddSingleton<CatalogService>(sp =>
     var cacheDurationSeconds = builder.Configuration.GetValue<int?>("ContentStorage:CacheDurationSeconds") ?? 3600;
     var cacheDuration = TimeSpan.FromSeconds(cacheDurationSeconds);
 
-    var service = new CatalogService(storagePath, logger, redisDb, cacheDuration);
+    // Pobierz IOutputCacheStore dla invalidacji cache
+    var outputCacheStore = sp.GetService<IOutputCacheStore>();
+
+    var service = new CatalogService(storagePath, logger, redisDb, cacheDuration, outputCacheStore);
 
     var lifetime = sp.GetRequiredService<IHostApplicationLifetime>();
     lifetime.ApplicationStopping.Register(() => service.Dispose());
@@ -88,6 +152,12 @@ builder.Services.AddSingleton<StreamingService>(sp =>
 });
 
 var app = builder.Build();
+
+// Response Compression - MUSI BYĆ NA POCZĄTKU PIPELINE
+app.UseResponseCompression();
+
+// Output Caching - zaraz po compression
+app.UseOutputCache();
 
 // Middleware obsługi błędów
 app.UseMiddleware<ErrorHandlingMiddleware>();

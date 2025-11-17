@@ -26,11 +26,13 @@ namespace Nexa.ContentServer.Controllers
         /// GET /api/catalog
         /// Zwraca listę dostępnych filmów z paginacją i opcjonalnym wyszukiwaniem.
         /// Optymalizacja: ładuje tylko potrzebne filmy (limit), nie wszystkie.
+        /// Output Cache: cache przez 5 minut, inwalidacja przy zmianach w storage.
         /// </summary>
         /// <param name="limit">Maksymalna liczba wyników (default: 50, max: 100)</param>
         /// <param name="offset">Offset dla paginacji (default: 0)</param>
         /// <param name="search">Opcjonalne: szukaj w tytułach</param>
         [HttpGet]
+        [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "CatalogCache")]
         [ProducesResponseType(typeof(CatalogResponse), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status503ServiceUnavailable)]
@@ -65,8 +67,10 @@ namespace Nexa.ContentServer.Controllers
         /// <summary>
         /// GET /api/catalog/{id}
         /// Zwraca szczegóły konkretnego filmu.
+        /// Output Cache: cache przez 5 minut, inwalidacja przy zmianach w storage.
         /// </summary>
         [HttpGet("{id}")]
+        [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "ContentCache")]
         [ProducesResponseType(typeof(ContentMetadata), StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]

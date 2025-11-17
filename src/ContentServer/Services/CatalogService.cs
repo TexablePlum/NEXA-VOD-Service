@@ -3,6 +3,7 @@ using Nexa.Shared.Models;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using StackExchange.Redis;
+using Microsoft.AspNetCore.OutputCaching;
 
 namespace Nexa.ContentServer.Services
 {
@@ -10,6 +11,7 @@ namespace Nexa.ContentServer.Services
     /// Serwis do zarządzania katalogiem filmów.
     /// Czyta metadata.json i zwraca listę dostępnych treści.
     /// Implementuje caching w Redis z automatycznym refreshem danych przy zmianach w storage.
+    /// Inwaliduje Output Cache przy zmianach w plikach storage.
     /// </summary>
     public class CatalogService : IDisposable
     {
@@ -18,17 +20,24 @@ namespace Nexa.ContentServer.Services
         private readonly IDatabase _redisDb;
         private readonly TimeSpan _cacheDuration;
         private readonly FileSystemWatcher _watcher;
+        private readonly IOutputCacheStore? _outputCacheStore;
 
         private const string CacheKeyContentIds = "catalog:ids";
         private string GetCacheKeyForContent(string contentId) => $"catalog:id:{contentId}";
         private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-        public CatalogService(string basePath, ILogger<CatalogService> logger, IDatabase redisDb, TimeSpan cacheDuration)
+        public CatalogService(
+            string basePath,
+            ILogger<CatalogService> logger,
+            IDatabase redisDb,
+            TimeSpan cacheDuration,
+            IOutputCacheStore? outputCacheStore = null)
         {
             _basePath = basePath;
             _logger = logger;
             _redisDb = redisDb;
             _cacheDuration = cacheDuration;
+            _outputCacheStore = outputCacheStore;
 
             _watcher = new FileSystemWatcher(_basePath)
             {
@@ -242,6 +251,7 @@ namespace Nexa.ContentServer.Services
         {
             _logger.LogInformation("Invalidating cache. Reason: {Reason}", reason);
 
+            // 1. Kasuje Redis cache
             // Kasuje listę ContentId
             _redisDb.KeyDelete(CacheKeyContentIds);
 
@@ -252,7 +262,22 @@ namespace Nexa.ContentServer.Services
             if (keys.Length > 0)
             {
                 _redisDb.KeyDelete(keys);
-                _logger.LogInformation("Invalidated {Count} individual content cache entries", keys.Length);
+                _logger.LogInformation("Invalidated {Count} individual Redis cache entries", keys.Length);
+            }
+
+            // 2. Kasuje Output Cache (HTTP responses) z tagiem "catalog"
+            if (_outputCacheStore != null)
+            {
+                try
+                {
+                    // Nie czeka na wynik
+                    _ = _outputCacheStore.EvictByTagAsync("catalog", default);
+                    _logger.LogInformation("Invalidated Output Cache for tag 'catalog'");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to invalidate Output Cache");
+                }
             }
         }
 
