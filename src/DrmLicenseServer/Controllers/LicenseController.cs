@@ -44,7 +44,7 @@ public class LicenseController : ControllerBase
         string quality,
         CancellationToken ct)
     {
-        // Pobierz userId z JWT claims
+        // Pobiera userId z JWT claims
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? User.FindFirst("sub")?.Value;
 
@@ -54,7 +54,7 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
         }
 
-        // Pobierz dane użytkownika
+        // Pobiera dane użytkownika
         var user = await _userService.GetUserByIdAsync(userId, ct);
 
         if (user == null || !user.IsActive)
@@ -62,7 +62,7 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
         }
 
-        // Pobierz licencję
+        // Pobiera licencję
         var license = await _licenseService.GetLicenseAsync(contentId, quality, user, ct);
 
         return Ok(license);

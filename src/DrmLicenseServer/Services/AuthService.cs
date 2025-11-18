@@ -104,13 +104,17 @@ public class AuthService
 
     /// <summary>
     /// Odświeża access token używając refresh tokenu.
+    /// FIXED: Hashuje podany token i porównuje z hashem w bazie.
     /// </summary>
     public async Task<AuthResponse> RefreshTokenAsync(string refreshToken, CancellationToken ct = default)
     {
-        // Sprawdza czy refresh token istnieje w bazie danych
+        // Hash podanego tokenu żeby porównać z hashem w bazie
+        var tokenHash = HashRefreshToken(refreshToken);
+
+        // Sprawdza czy zahashowany refresh token istnieje w bazie danych
         var tokenEntity = await _dbContext.RefreshTokens
             .Include(rt => rt.User)
-            .FirstOrDefaultAsync(rt => rt.Token == refreshToken, ct);
+            .FirstOrDefaultAsync(rt => rt.Token == tokenHash, ct);
 
         if (tokenEntity == null || tokenEntity.IsRevoked || tokenEntity.ExpiresAt <= DateTime.UtcNow)
         {
@@ -128,7 +132,7 @@ public class AuthService
             throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
         }
 
-        // Oznacza stary refresh token jako revoked
+        // Oznacza stary refresh token jako wygasły
         tokenEntity.IsRevoked = true;
         await _dbContext.SaveChangesAsync(ct);
 
@@ -140,19 +144,23 @@ public class AuthService
 
     /// <summary>
     /// Generuje access token i refresh token dla użytkownika.
+    /// Refresh token jest hashowany SHA256 przed zapisem do DB.
     /// </summary>
     private async Task<AuthResponse> GenerateAuthResponseAsync(User user, CancellationToken ct)
     {
         // Generuje access token (JWT)
         var accessToken = GenerateAccessToken(user);
 
-        // Generuje refresh token (random)
+        // Generuje refresh token (random 256-bit)
         var refreshToken = GenerateRefreshToken();
 
-        // Zapisuje refresh token w bazie danych
+        // Hash refresh token przed zapisem do bazy (SHA256)
+        var tokenHash = HashRefreshToken(refreshToken);
+
+        // Zapisuje zahashowany refresh token w bazie danych
         var tokenEntity = new RefreshTokenEntity
         {
-            Token = refreshToken,
+            Token = tokenHash,
             UserId = user.UserId,
             ExpiresAt = DateTime.UtcNow.AddDays(_refreshTokenExpirationDays),
             CreatedAt = DateTime.UtcNow,
@@ -165,7 +173,7 @@ public class AuthService
         return new AuthResponse
         {
             AccessToken = accessToken,
-            RefreshToken = refreshToken,
+            RefreshToken = refreshToken, // Zwraca plaintext do klienta
             ExpiresIn = _accessTokenExpirationMinutes * 60,
             TokenType = "Bearer",
             User = new UserInfo
@@ -215,5 +223,18 @@ public class AuthService
         using var rng = RandomNumberGenerator.Create();
         rng.GetBytes(randomBytes);
         return Convert.ToBase64String(randomBytes);
+    }
+
+    /// <summary>
+    /// Hashuje refresh token za pomocą SHA256.
+    /// Używa SHA256 zamiast BCrypt.
+    /// SHA256 jest bezpieczny dla 256-bit random data (brak słownikowych ataków).
+    /// </summary>
+    private string HashRefreshToken(string token)
+    {
+        using var sha256 = SHA256.Create();
+        var tokenBytes = Encoding.UTF8.GetBytes(token);
+        var hashBytes = sha256.ComputeHash(tokenBytes);
+        return Convert.ToBase64String(hashBytes);
     }
 }

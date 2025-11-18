@@ -2,27 +2,51 @@ using StackExchange.Redis;
 using System;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 // Parsowanie argumentów
-if (args.Length < 1)
+if (args.Length < 2)
 {
-    Console.WriteLine("Usage: CekImporter <content-storage-path> [redis-host] [redis-password]");
-    Console.WriteLine("Example: CekImporter C:\\content\\storage localhost:6379 mypassword");
+    Console.WriteLine("Usage: CekImporter <content-storage-path> <cek-master-key-base64> [redis-host] [redis-password]");
+    Console.WriteLine("Example: CekImporter C:\\content\\storage rkf45P7MB... localhost:6379 mypassword");
+    Console.WriteLine("\nGenerate master key: openssl rand -base64 32");
     return;
 }
 
 var storagePath = args[0];
-var redisHost = args.Length > 1 ? args[1] : "localhost:6379";
-var redisPassword = args.Length > 2 ? args[2] : null;
+var masterKeyBase64 = args[1];
+var redisHost = args.Length > 2 ? args[2] : "localhost:6379";
+var redisPassword = args.Length > 3 ? args[3] : null;
 
 Console.WriteLine("========================================");
-Console.WriteLine("NEXA - CEK Importer");
+Console.WriteLine("NEXA - CEK Importer (with encryption)");
 Console.WriteLine("========================================");
 Console.WriteLine($"Storage: {storagePath}");
 Console.WriteLine($"Redis: {redisHost}");
 
-// Połącz z Redis
+// Walidacja master key
+byte[] masterKey;
+try
+{
+    masterKey = Convert.FromBase64String(masterKeyBase64);
+    if (masterKey.Length != 32)
+    {
+        Console.WriteLine($"✗ CEK Master Key must be 32 bytes (256 bits). Current: {masterKey.Length} bytes");
+        Console.WriteLine("Generate with: openssl rand -base64 32");
+        return;
+    }
+    Console.WriteLine("✓ CEK Master Key loaded (256-bit)\n");
+}
+catch (FormatException)
+{
+    Console.WriteLine("✗ Invalid CEK Master Key format. Must be Base64 string.");
+    Console.WriteLine("Generate with: openssl rand -base64 32");
+    return;
+}
+
+// Łączenie z Redis
 var configOptions = ConfigurationOptions.Parse(redisHost);
 if (!string.IsNullOrEmpty(redisPassword))
 {
@@ -44,7 +68,7 @@ catch (Exception ex)
 
 var db = redis.GetDatabase();
 
-// Skanuj katalogi content
+// Skanowanie katalogów content
 if (!Directory.Exists(storagePath))
 {
     Console.WriteLine($"✗ Storage path does not exist: {storagePath}");
@@ -76,12 +100,12 @@ foreach (var contentDir in contentDirs)
 
     try
     {
-        // Wczytaj metadata
+        // Wczytanie metadata
         var metadataJson = File.ReadAllText(metadataFile);
         var metadata = JsonDocument.Parse(metadataJson);
         var requiredPlan = metadata.RootElement.GetProperty("RequiredPlan").GetString() ?? "free";
 
-        // Wczytaj encryption
+        // Wczytanie encryption
         var encryptionJson = File.ReadAllText(encryptionFile);
         var encryption = JsonDocument.Parse(encryptionJson);
         var qualities = encryption.RootElement.GetProperty("Qualities");
@@ -95,6 +119,8 @@ foreach (var contentDir in contentDirs)
 
         // Import CEK-ów dla każdej jakości
         int qualityCount = 0;
+        var qualitiesSetKey = $"content:qualities:{contentId}";
+
         foreach (var quality in qualities.EnumerateObject())
         {
             var qualityName = quality.Name;
@@ -107,17 +133,33 @@ foreach (var contentDir in contentDirs)
                 continue;
             }
 
-            var cek = File.ReadAllText(keyFile).Trim();
+            var cekPlaintext = File.ReadAllText(keyFile).Trim();
 
+            // Szyfruje CEK za pomocą master keya
+            string encryptedCek;
+            try
+            {
+                encryptedCek = EncryptCek(cekPlaintext, masterKey);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  [ERROR] {qualityName} - encryption failed: {ex.Message}");
+                continue;
+            }
+
+            // Zapisuje zaszyfrowany CEK w nowym formacie
             var cekKey = $"cek:{contentId}:{qualityName}";
-            var cekValue = JsonSerializer.Serialize(new { Key = cek, KeyId = keyId });
+            var cekValue = JsonSerializer.Serialize(new { EncryptedKey = encryptedCek, KeyId = keyId });
             db.StringSet(cekKey, cekValue);
 
-            Console.WriteLine($"  ✓ {qualityName}: KID={keyId}");
+            // Dodaje jakość do Redis SET (dla szybkiego listingu)
+            db.SetAdd(qualitiesSetKey, qualityName);
+
+            Console.WriteLine($"  ✓ {qualityName}: KID={keyId} (encrypted)");
             qualityCount++;
         }
 
-        Console.WriteLine($"  Imported {qualityCount} qualities\n");
+        Console.WriteLine($"  Imported {qualityCount} qualities (encrypted + SET)\n");
         totalImported++;
     }
     catch (Exception ex)
@@ -131,3 +173,27 @@ redis.Close();
 Console.WriteLine("========================================");
 Console.WriteLine($"✓ Import completed: {totalImported} contents");
 Console.WriteLine("========================================");
+
+// ===========================
+// CEK Encryption Function
+// ===========================
+static string EncryptCek(string plaintext, byte[] masterKey)
+{
+    using var aes = new AesGcm(masterKey, AesGcm.TagByteSizes.MaxSize);
+
+    var plaintextBytes = Encoding.UTF8.GetBytes(plaintext);
+    var nonce = new byte[AesGcm.NonceByteSizes.MaxSize]; // 12 bytes
+    var ciphertext = new byte[plaintextBytes.Length];
+    var tag = new byte[AesGcm.TagByteSizes.MaxSize]; // 16 bytes
+
+    RandomNumberGenerator.Fill(nonce);
+    aes.Encrypt(nonce, plaintextBytes, ciphertext, tag);
+
+    // Format: nonce(12) + tag(16) + ciphertext
+    var result = new byte[nonce.Length + tag.Length + ciphertext.Length];
+    Buffer.BlockCopy(nonce, 0, result, 0, nonce.Length);
+    Buffer.BlockCopy(tag, 0, result, nonce.Length, tag.Length);
+    Buffer.BlockCopy(ciphertext, 0, result, nonce.Length + tag.Length, ciphertext.Length);
+
+    return Convert.ToBase64String(result);
+}

@@ -3,6 +3,7 @@ using Nexa.Shared.Exceptions;
 using Nexa.Shared.Constants;
 using Nexa.DrmLicenseServer.Data;
 using Nexa.DrmLicenseServer.Data.Entities;
+using Nexa.DrmLicenseServer.Validation;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 using System.Text.Json;
@@ -21,23 +22,27 @@ public class LicenseService
     private readonly ILogger<LicenseService> _logger;
     private readonly IConfiguration _configuration;
     private readonly AuditService _auditService;
+    private readonly CekEncryptionService _cekEncryption;
     private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private const string CekKeyPrefix = "cek:";
     private const string ContentMetaPrefix = "content:meta:";
+    private const string AvailableQualitiesSetPrefix = "content:qualities:"; // Redis SET dla dostępnych jakości
 
     public LicenseService(
         IDatabase redisDb,
         NexaDbContext dbContext,
         ILogger<LicenseService> logger,
         IConfiguration configuration,
-        AuditService auditService)
+        AuditService auditService,
+        CekEncryptionService cekEncryption)
     {
         _redisDb = redisDb;
         _dbContext = dbContext;
         _logger = logger;
         _configuration = configuration;
         _auditService = auditService;
+        _cekEncryption = cekEncryption;
     }
 
     /// <summary>
@@ -129,7 +134,7 @@ public class LicenseService
             );
         }
 
-        // Pobiera CEK dla tej jakości
+        // Pobiera CEK dla tej jakości (zaszyfrowany w Redis)
         var cekKey = $"{CekKeyPrefix}{contentId}:{quality}";
         var cekJson = await _redisDb.StringGetAsync(cekKey);
 
@@ -142,11 +147,23 @@ public class LicenseService
             );
         }
 
-        var cekData = JsonSerializer.Deserialize<CekData>(cekJson.ToString(), _jsonOptions);
+        var encryptedCekData = JsonSerializer.Deserialize<EncryptedCekData>(cekJson.ToString(), _jsonOptions);
 
-        if (cekData == null)
+        if (encryptedCekData == null)
         {
             throw new InternalServerException("Failed to deserialize CEK data.");
+        }
+
+        // Deszyfruje CEK za pomocą master keya (envelope decryption)
+        string decryptedKey;
+        try
+        {
+            decryptedKey = _cekEncryption.Decrypt(encryptedCekData.EncryptedKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to decrypt CEK for {ContentId}:{Quality}", contentId, quality);
+            throw new InternalServerException("Failed to decrypt license key. Please contact support.");
         }
 
         // Oblicza czas wygaśnięcia licencji
@@ -161,13 +178,13 @@ public class LicenseService
         await _auditService.LogLicenseIssuedAsync(
             user.UserId, contentId, quality, user.Plan, expiresAt, ct);
 
-        // Zapisuje informację o wydanej licencji (do tracking concurrent streams i renewal)
+        // Zapisuje informację o wydanej licencji
         await SaveIssuedLicenseAsync(user.UserId, contentId, quality, expiresAt, ct);
 
         return new LicenseResponse
         {
-            Key = cekData.Key,
-            KeyId = cekData.KeyId,
+            Key = decryptedKey,
+            KeyId = encryptedCekData.KeyId,
             Quality = quality,
             ContentId = contentId,
             ExpiresAt = expiresAt
@@ -194,7 +211,7 @@ public class LicenseService
 
         if (licenseEntity != null)
         {
-            // Licencja istnieje i jest nadal ważna - sprawdza threshold
+            // Licencja istnieje i jest nadal ważna
             var renewalThresholdMinutes = _configuration.GetValue<int>("License:RenewalThresholdMinutes", 30);
             var timeLeft = licenseEntity.ExpiresAt - DateTime.UtcNow;
 
@@ -288,6 +305,7 @@ public class LicenseService
 
     /// <summary>
     /// Importuje CEK dla contentu (używane przez skrypt importu).
+    /// CEK jest walidowany i szyfrowany przed zapisem do Redis.
     /// </summary>
     public async Task ImportCekAsync(
         string contentId,
@@ -296,18 +314,54 @@ public class LicenseService
         string keyId,
         CancellationToken ct = default)
     {
-        var cekData = new CekData
+        // Walidacja CEK
+        if (!CekValidator.Validate(key, out var cekError))
         {
-            Key = key,
+            _logger.LogError("Invalid CEK for {ContentId}:{Quality} - {Error}", contentId, quality, cekError);
+            throw new ValidationException($"Invalid CEK: {cekError}");
+        }
+
+        // Walidacja KeyId
+        if (!CekValidator.ValidateKeyId(keyId, out var keyIdError))
+        {
+            _logger.LogError("Invalid KeyId for {ContentId}:{Quality} - {Error}", contentId, quality, keyIdError);
+            throw new ValidationException($"Invalid KeyId: {keyIdError}");
+        }
+
+        // Walidacja Quality
+        if (!Qualities.IsValid(quality))
+        {
+            throw new ValidationException($"Invalid quality: {quality}");
+        }
+
+        // Szyfruje CEK za pomocą master key
+        string encryptedKey;
+        try
+        {
+            encryptedKey = _cekEncryption.Encrypt(key);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to encrypt CEK for {ContentId}:{Quality}", contentId, quality);
+            throw new InternalServerException("Failed to encrypt CEK", ex);
+        }
+
+        var encryptedCekData = new EncryptedCekData
+        {
+            EncryptedKey = encryptedKey,
             KeyId = keyId
         };
 
+        // Zapisuje zaszyfrowany CEK do Redis
         var cekKey = $"{CekKeyPrefix}{contentId}:{quality}";
-        var cekJson = JsonSerializer.Serialize(cekData, _jsonOptions);
-
+        var cekJson = JsonSerializer.Serialize(encryptedCekData, _jsonOptions);
         await _redisDb.StringSetAsync(cekKey, cekJson);
 
-        _logger.LogInformation("Imported CEK for content {ContentId} quality {Quality}", contentId, quality);
+        // Dodaje quality do Redis SET (dla szybkiego listingu dostępnych jakości)
+        var qualitiesSetKey = $"{AvailableQualitiesSetPrefix}{contentId}";
+        await _redisDb.SetAddAsync(qualitiesSetKey, quality);
+
+        _logger.LogInformation("Imported encrypted CEK for content {ContentId} quality {Quality}", contentId, quality);
     }
 
     /// <summary>
@@ -340,6 +394,7 @@ public class LicenseService
     /// <summary>
     /// Sprawdza limit concurrent streams dla użytkownika.
     /// free/basic: max 1 stream, pro: max 2 streamy jednocześnie.
+    /// FIXED: Używa Serializable isolation level aby zapobiec race condition.
     /// </summary>
     private async Task CheckConcurrentStreamLimitAsync(
         string userId,
@@ -351,39 +406,63 @@ public class LicenseService
         // Pobiera limit dla planu użytkownika
         var limit = _configuration.GetValue<int>($"License:ConcurrentStreamLimits:{userPlan}", 1);
 
-        // Pobiera wszystkie aktywne licencje użytkownika z bazy danych
-        var activeLicenses = await _dbContext.IssuedLicenses
-            .Where(l =>
-                l.UserId == userId &&
-                l.ExpiresAt > DateTime.UtcNow &&
-                // Pomija tę samą licencję która teraz odnawiana
-                !(l.ContentId == contentId && l.Quality == quality))
-            .ToListAsync(ct);
+        // Używa Serializable transaction aby zapobiec race condition
+        // Bez tego 2 requesty mogły jednocześnie sprawdzić count=0 i obie przejść
+        using var transaction = await _dbContext.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct);
 
-        var activeStreams = activeLicenses.Count;
-        var activeStreamsList = activeLicenses
-            .Select(l => $"{l.ContentId}:{l.Quality}")
-            .ToList();
-
-        // Sprawdza czy przekroczono limit
-        if (activeStreams >= limit)
+        try
         {
-            _logger.LogWarning(
-                "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
-                userId, userPlan, activeStreams, limit, string.Join(", ", activeStreamsList));
+            // Pobiera wszystkie aktywne licencje użytkownika z bazy danych
+            var activeLicenses = await _dbContext.IssuedLicenses
+                .Where(l =>
+                    l.UserId == userId &&
+                    l.ExpiresAt > DateTime.UtcNow &&
+                    // Pomija tę samą licencję która teraz odnawiana
+                    !(l.ContentId == contentId && l.Quality == quality))
+                .ToListAsync(ct);
 
-            throw new ForbiddenException(
-                $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
-                $"Aktualnie aktywne streamy ({activeStreams}): {string.Join(", ", activeStreamsList)}. " +
-                "Zamknij jeden z aktywnych streamów lub poczekaj na wygaśnięcie licencji.",
-                new Dictionary<string, object>
-                {
-                    ["userPlan"] = userPlan,
-                    ["limit"] = limit,
-                    ["activeStreams"] = activeStreams,
-                    ["activeStreamsList"] = activeStreamsList
-                }
-            );
+            var activeStreams = activeLicenses.Count;
+            var activeStreamsList = activeLicenses
+                .Select(l => $"{l.ContentId}:{l.Quality}")
+                .ToList();
+
+            // Sprawdza czy przekroczono limit
+            if (activeStreams >= limit)
+            {
+                _logger.LogWarning(
+                    "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
+                    userId, userPlan, activeStreams, limit, string.Join(", ", activeStreamsList));
+
+                // Rollback transaction
+                await transaction.RollbackAsync(ct);
+
+                throw new ForbiddenException(
+                    $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
+                    $"Aktualnie aktywne streamy ({activeStreams}): {string.Join(", ", activeStreamsList)}. " +
+                    "Zamknij jeden z aktywnych streamów lub poczekaj na wygaśnięcie licencji.",
+                    new Dictionary<string, object>
+                    {
+                        ["userPlan"] = userPlan,
+                        ["limit"] = limit,
+                        ["activeStreams"] = activeStreams,
+                        ["activeStreamsList"] = activeStreamsList
+                    }
+                );
+            }
+
+            // Commit transaction jeśli wszystko OK
+            await transaction.CommitAsync(ct);
+        }
+        catch (ForbiddenException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error checking concurrent stream limit for user {UserId}", userId);
+            await transaction.RollbackAsync(ct);
+            throw;
         }
     }
 
@@ -405,14 +484,15 @@ public class LicenseService
 
     /// <summary>
     /// Pobiera listę RZECZYWIŚCIE dostępnych jakości dla contentu,
-    /// przefiltrowaną przez plan użytkownika. Wyniki są cache'owane w Redis (TTL: 300s).
+    /// przefiltrowaną przez plan użytkownika. Wyniki są cache'owane w Redis (TTL: 3600s).
+    /// Używa Redis SET (SMEMBERS) O(1) zamiast O(N).
     /// </summary>
     private async Task<List<string>> GetAvailableQualitiesAsync(
         string contentId,
         string userPlan,
         CancellationToken ct)
     {
-        // Sprawdza najpierw cache 
+        // Sprawdza najpierw cache
         var cacheKey = $"content:qualities:{contentId}:{userPlan}";
         var cachedJson = await _redisDb.StringGetAsync(cacheKey);
 
@@ -426,43 +506,35 @@ public class LicenseService
             }
         }
 
-        _logger.LogDebug("Cache miss for qualities: {ContentId}, plan: {Plan} - scanning Redis", contentId, userPlan);
-
-        var result = new List<string>();
+        _logger.LogDebug("Cache miss for qualities: {ContentId}, plan: {Plan} - fetching from Redis SET", contentId, userPlan);
 
         // Pobiera maksymalną jakość dla planu użytkownika
         var maxQuality = Plans.GetMaxQuality(userPlan);
 
-        // Znajduje wszystkie klucze CEK dla tego contentu
-        // Format: cek:{contentId}:{quality}
-        var pattern = $"{CekKeyPrefix}{contentId}:*";
-        var server = _redisDb.Multiplexer.GetServer(_redisDb.Multiplexer.GetEndPoints().First());
+        // Format SET key: content:qualities:{contentId}
+        var qualitiesSetKey = $"{AvailableQualitiesSetPrefix}{contentId}";
+        var allQualities = await _redisDb.SetMembersAsync(qualitiesSetKey);
 
-        await foreach (var key in server.KeysAsync(pattern: pattern))
+        var result = new List<string>();
+
+        foreach (var qualityValue in allQualities)
         {
-            // Ekstraktuje jakość z klucza: "cek:uuid:1080p" -> "1080p"
-            var keyStr = key.ToString();
-            var parts = keyStr.Split(':');
+            var quality = qualityValue.ToString();
 
-            if (parts.Length == 3)
+            // Sprawdza czy ta jakość jest dozwolona dla planu użytkownika
+            if (Qualities.IsValid(quality) &&
+                Qualities.IsQualitySufficient(maxQuality, quality))
             {
-                var quality = parts[2];
-
-                // Sprawdza czy ta jakość jest dozwolona dla planu użytkownika
-                if (Qualities.IsValid(quality) &&
-                    Qualities.IsQualitySufficient(maxQuality, quality))
-                {
-                    result.Add(quality);
-                }
+                result.Add(quality);
             }
         }
 
         // Sortuje według hierarchii jakości (od najniższej do najwyższej)
         result.Sort((a, b) => Qualities.GetLevel(a).CompareTo(Qualities.GetLevel(b)));
 
-        // Zapisuje w cache (TTL: 300s = 5 minut)
+        // Zapisuje w cache (TTL: 3600s = 1 godzina)
         var resultJson = JsonSerializer.Serialize(result, _jsonOptions);
-        await _redisDb.StringSetAsync(cacheKey, resultJson, TimeSpan.FromSeconds(300));
+        await _redisDb.StringSetAsync(cacheKey, resultJson, TimeSpan.FromSeconds(3600));
 
         _logger.LogDebug("Cached qualities for {ContentId}, plan: {Plan}: {Qualities}",
             contentId, userPlan, string.Join(", ", result));
@@ -512,11 +584,12 @@ public class LicenseService
     }
 
     /// <summary>
-    /// Model wewnętrzny dla CEK w Redis.
+    /// Model wewnętrzny dla zaszyfrowanego CEK w Redis.
+    /// EncryptedKey zawiera: Base64(nonce + tag + ciphertext) zaszyfrowane master key-em.
     /// </summary>
-    private class CekData
+    private class EncryptedCekData
     {
-        public string Key { get; set; } = string.Empty;
+        public string EncryptedKey { get; set; } = string.Empty;
         public string KeyId { get; set; } = string.Empty;
     }
 

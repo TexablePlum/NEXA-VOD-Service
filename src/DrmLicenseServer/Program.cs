@@ -1,5 +1,6 @@
 using AspNetCoreRateLimit;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Nexa.DrmLicenseServer.Data;
@@ -18,7 +19,12 @@ builder.Services.AddControllers();
 builder.Services.AddDbContext<NexaDbContext>(options =>
 {
     var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-    options.UseNpgsql(connectionString);
+    options.UseNpgsql(connectionString, npgsqlOptions =>
+    {
+        // Ustawienia
+        npgsqlOptions.MaxBatchSize(100);
+        npgsqlOptions.CommandTimeout(30);
+    });
 });
 
 // Rate Limiting
@@ -149,6 +155,10 @@ builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<LicenseService>();
 builder.Services.AddSingleton<AuditService>();
+builder.Services.AddSingleton<CekEncryptionService>();
+
+// Background services
+builder.Services.AddHostedService<LicenseCleanupService>(); // Czyszczenie wygasłych licencji
 
 // Health checks
 builder.Services.AddHealthChecks()
@@ -179,6 +189,27 @@ using (var scope = app.Services.CreateScope())
 
 // Middleware obsługi błędów
 app.UseMiddleware<ErrorHandlingMiddleware>();
+
+// Forwarded Headers - aplikacja rozumie że jest za proxy
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
+
+// HTTPS enforcement - warunkowo włączony (wyłączony w production za proxy)
+// W Docker/Kubernetes proxy (nginx, traefik) kończy HTTPS i wysyła HTTP do kontenera
+// UseHttpsRedirection powodowałoby redirect loop
+// Włączyć tylko jeśli nie jesteś za proxy (Development lub Security:EnforceHttpsRedirection=true)
+if (!app.Environment.IsProduction() || builder.Configuration.GetValue<bool>("Security:EnforceHttpsRedirection", false))
+{
+    app.UseHttpsRedirection();
+
+    // HSTS (HTTP Strict Transport Security) - tylko w Development
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseHsts();
+    }
+}
 
 // Rate Limiting
 app.UseIpRateLimiting();
