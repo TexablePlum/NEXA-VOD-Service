@@ -18,7 +18,7 @@
         public int Limit { get; set; }
 
         /// <summary>
-        /// Od którego filmu zaczynamy (dla stronicowania)
+        /// Od którego filmu zaczyna (dla stronicowania)
         /// Przykład: offset=0 (pierwsza strona), offset=50 (druga strona)
         /// </summary>
         public int Offset { get; set; }

@@ -22,7 +22,7 @@
         public string Description { get; set; } = string.Empty;
 
         /// <summary>
-        /// Długość filmu w SEKUNDACH
+        /// Długość filmu w sekundach
         /// </summary>
         public double DurationSeconds { get; set; }
 

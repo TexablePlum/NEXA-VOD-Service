@@ -38,6 +38,39 @@
 
         // ===== TYLKO DRM SERWER =====
 
-        // TODO: Dodać po implementacji DRM-a
+        /// <summary>
+        /// Brak lub nieprawidłowy token JWT (401).
+        /// </summary>
+        public const string UNAUTHORIZED = "UNAUTHORIZED";
+
+        /// <summary>
+        /// Użytkownik authenticated ale nie ma uprawnień (403).
+        /// </summary>
+        public const string FORBIDDEN = "FORBIDDEN";
+
+        /// <summary>
+        /// Użytkownik o podanym email już istnieje (409).
+        /// </summary>
+        public const string USER_ALREADY_EXISTS = "USER_ALREADY_EXISTS";
+
+        /// <summary>
+        /// Nieprawidłowe dane logowania (401).
+        /// </summary>
+        public const string INVALID_CREDENTIALS = "INVALID_CREDENTIALS";
+
+        /// <summary>
+        /// Nieprawidłowy refresh token (401).
+        /// </summary>
+        public const string INVALID_REFRESH_TOKEN = "INVALID_REFRESH_TOKEN";
+
+        /// <summary>
+        /// Licencja (CEK) dla contentu nie znaleziona (404).
+        /// </summary>
+        public const string LICENSE_NOT_FOUND = "LICENSE_NOT_FOUND";
+
+        /// <summary>
+        /// Plan subskrypcji niewystarczający do odtworzenia contentu (403).
+        /// </summary>
+        public const string INSUFFICIENT_PLAN = "INSUFFICIENT_PLAN";
     }
 }
