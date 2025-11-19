@@ -12,6 +12,7 @@ public class NexaDbContext : DbContext
     public DbSet<UserEntity> Users { get; set; }
     public DbSet<RefreshTokenEntity> RefreshTokens { get; set; }
     public DbSet<IssuedLicenseEntity> IssuedLicenses { get; set; }
+    public DbSet<UserDeviceKeyEntity> UserDeviceKeys { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -46,10 +47,25 @@ public class NexaDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.UserId, e.ContentId, e.Quality });
             entity.HasIndex(e => e.ExpiresAt);
+            entity.HasIndex(e => new { e.UserId, e.LastHeartbeat });
             entity.Property(e => e.IssuedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
 
             entity.HasOne(e => e.User)
                 .WithMany(u => u.IssuedLicenses)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Konfiguracja UserDeviceKeyEntity
+        modelBuilder.Entity<UserDeviceKeyEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.DeviceId }).IsUnique();
+            entity.HasIndex(e => e.DeviceId);
+            entity.Property(e => e.RegisteredAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            entity.HasOne(e => e.User)
+                .WithMany(u => u.DeviceKeys)
                 .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

@@ -38,8 +38,7 @@ public class LicenseCleanupService : BackgroundService
     {
         _logger.LogInformation("LicenseCleanupService started");
 
-        // Czeka 1 minutę po starcie aplikacji przed pierwszym cleanupem
-        await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+        await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -66,25 +65,26 @@ public class LicenseCleanupService : BackgroundService
 
         var cutoffDate = DateTime.UtcNow - _retentionPeriod;
 
-        _logger.LogInformation("Starting license cleanup. Removing licenses expired before {CutoffDate}", cutoffDate);
+        _logger.LogInformation("Starting database cleanup. Removing data older than {CutoffDate}", cutoffDate);
 
         try
         {
-            var deletedCount = await dbContext.IssuedLicenses
+            // 1. Usuwa wygasłe licencje starsze niż retention period
+            var deletedLicensesCount = await dbContext.IssuedLicenses
                 .Where(l => l.ExpiresAt < cutoffDate)
                 .ExecuteDeleteAsync(ct);
 
-            if (deletedCount > 0)
+            if (deletedLicensesCount > 0)
             {
-                _logger.LogInformation("Cleaned up {DeletedCount} expired licenses", deletedCount);
+                _logger.LogInformation("Cleaned up {DeletedCount} expired licenses", deletedLicensesCount);
             }
             else
             {
                 _logger.LogDebug("No expired licenses to clean up");
             }
 
-            // czyszczenie wygasłych refresh tokenów
-            var refreshTokensCutoff = DateTime.UtcNow; // Wygasłe teraz
+            // 2. Usuwa wygasłe/revoked refresh tokeny
+            var refreshTokensCutoff = DateTime.UtcNow;
             var deletedTokensCount = await dbContext.RefreshTokens
                 .Where(rt => rt.ExpiresAt < refreshTokensCutoff || rt.IsRevoked)
                 .ExecuteDeleteAsync(ct);
@@ -93,10 +93,20 @@ public class LicenseCleanupService : BackgroundService
             {
                 _logger.LogInformation("Cleaned up {DeletedCount} expired/revoked refresh tokens", deletedTokensCount);
             }
+
+            var deviceKeyCutoff = DateTime.UtcNow.AddDays(-90);
+            var deletedDeviceKeysCount = await dbContext.UserDeviceKeys
+                .Where(d => !d.IsActive || d.LastUsedAt < deviceKeyCutoff)
+                .ExecuteDeleteAsync(ct);
+
+            if (deletedDeviceKeysCount > 0)
+            {
+                _logger.LogInformation("Cleaned up {DeletedCount} inactive/old device keys", deletedDeviceKeysCount);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to clean up expired licenses");
+            _logger.LogError(ex, "Failed to clean up database");
             throw;
         }
     }

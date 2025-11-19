@@ -154,8 +154,10 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddScoped<UserService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<LicenseService>();
+builder.Services.AddScoped<DeviceKeyService>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<CekEncryptionService>();
+builder.Services.AddSingleton<CekPublicKeyEncryptionService>();
 
 // Background services
 builder.Services.AddHostedService<LicenseCleanupService>(); // Czyszczenie wygasłych licencji
@@ -199,7 +201,7 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 // HTTPS enforcement - warunkowo włączony (wyłączony w production za proxy)
 // W Docker/Kubernetes proxy (nginx, traefik) kończy HTTPS i wysyła HTTP do kontenera
 // UseHttpsRedirection powodowałoby redirect loop
-// Włączyć tylko jeśli nie jesteś za proxy (Development lub Security:EnforceHttpsRedirection=true)
+// Włączyć tylko jeśli nie ma proxy (Development lub Security:EnforceHttpsRedirection=true)
 if (!app.Environment.IsProduction() || builder.Configuration.GetValue<bool>("Security:EnforceHttpsRedirection", false))
 {
     app.UseHttpsRedirection();

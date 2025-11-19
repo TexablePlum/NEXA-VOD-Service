@@ -11,6 +11,7 @@ public class AuditService
     private readonly IDatabase _redisDb;
     private readonly ILogger<AuditService> _logger;
     private const string AuditStreamKey = "license:audit";
+    private const int MaxAuditEntries = 10000;
 
     public AuditService(IDatabase redisDb, ILogger<AuditService> logger)
     {
@@ -42,7 +43,7 @@ public class AuditService
                 new("timestamp", DateTime.UtcNow.ToString("o"))
             };
 
-            await _redisDb.StreamAddAsync(AuditStreamKey, entries);
+            await _redisDb.StreamAddAsync(AuditStreamKey, entries, maxLength: MaxAuditEntries, useApproximateMaxLength: true);
 
             _logger.LogDebug(
                 "Audit: License issued - user {UserId}, content {ContentId}, quality {Quality}",
@@ -79,7 +80,7 @@ public class AuditService
                 new("timestamp", DateTime.UtcNow.ToString("o"))
             };
 
-            await _redisDb.StreamAddAsync(AuditStreamKey, entries);
+            await _redisDb.StreamAddAsync(AuditStreamKey, entries, maxLength: MaxAuditEntries, useApproximateMaxLength: true);
 
             _logger.LogDebug(
                 "Audit: License renewed - user {UserId}, content {ContentId}, quality {Quality}",
@@ -113,7 +114,7 @@ public class AuditService
                 new("timestamp", DateTime.UtcNow.ToString("o"))
             };
 
-            await _redisDb.StreamAddAsync(AuditStreamKey, entries);
+            await _redisDb.StreamAddAsync(AuditStreamKey, entries, maxLength: MaxAuditEntries, useApproximateMaxLength: true);
 
             _logger.LogDebug(
                 "Audit: License revoked - user {UserId}, content {ContentId}, quality {Quality}",
@@ -149,7 +150,7 @@ public class AuditService
                 new("timestamp", DateTime.UtcNow.ToString("o"))
             };
 
-            await _redisDb.StreamAddAsync(AuditStreamKey, entries);
+            await _redisDb.StreamAddAsync(AuditStreamKey, entries, maxLength: MaxAuditEntries, useApproximateMaxLength: true);
 
             _logger.LogDebug(
                 "Audit: License rejected - user {UserId}, content {ContentId}, reason {Reason}",

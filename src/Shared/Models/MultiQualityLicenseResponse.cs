@@ -50,9 +50,11 @@ public class QualityLicense
     public string Quality { get; set; } = string.Empty;
 
     /// <summary>
-    /// Content Encryption Key w formacie hex (16 bajtów = 32 znaki hex).
+    /// Content Encryption Key zaszyfrowany public keyem urządzenia (Base64 encoded).
+    /// Klient musi odszyfrować używając swojego private key (TPM/TEE).
+    /// Format: RSA-OAEP-SHA256 encrypted CEK.
     /// </summary>
-    public string Key { get; set; } = string.Empty;
+    public string EncryptedKey { get; set; } = string.Empty;
 
     /// <summary>
     /// Key ID w formacie hex (UUID bez kresek).

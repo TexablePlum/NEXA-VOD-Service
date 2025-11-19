@@ -34,4 +34,5 @@ public class UserEntity
 
     public ICollection<RefreshTokenEntity> RefreshTokens { get; set; } = new List<RefreshTokenEntity>();
     public ICollection<IssuedLicenseEntity> IssuedLicenses { get; set; } = new List<IssuedLicenseEntity>();
+    public ICollection<UserDeviceKeyEntity> DeviceKeys { get; set; } = new List<UserDeviceKeyEntity>();
 }

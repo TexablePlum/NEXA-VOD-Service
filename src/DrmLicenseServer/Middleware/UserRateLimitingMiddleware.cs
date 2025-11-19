@@ -133,19 +133,20 @@ public class UserRateLimitingMiddleware
 
     private int ParsePeriodToSeconds(string period)
     {
-        if (period.EndsWith("s"))
+        if (period.EndsWith("s") && int.TryParse(period.TrimEnd('s'), out var seconds))
         {
-            return int.Parse(period.TrimEnd('s'));
+            return Math.Max(1, Math.Min(seconds, 86400)); // 1s - 24h
         }
-        else if (period.EndsWith("m"))
+        else if (period.EndsWith("m") && int.TryParse(period.TrimEnd('m'), out var minutes))
         {
-            return int.Parse(period.TrimEnd('m')) * 60;
+            return Math.Max(1, Math.Min(minutes * 60, 86400)); // 1m - 24h
         }
-        else if (period.EndsWith("h"))
+        else if (period.EndsWith("h") && int.TryParse(period.TrimEnd('h'), out var hours))
         {
-            return int.Parse(period.TrimEnd('h')) * 3600;
+            return Math.Max(1, Math.Min(hours * 3600, 86400)); // 1h - 24h
         }
 
+        _logger.LogWarning("Invalid period format: {Period}, using default 60s", period);
         return 60; // Domyślnie: 1 minuta
     }
 }

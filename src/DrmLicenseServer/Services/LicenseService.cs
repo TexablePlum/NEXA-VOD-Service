@@ -23,6 +23,8 @@ public class LicenseService
     private readonly IConfiguration _configuration;
     private readonly AuditService _auditService;
     private readonly CekEncryptionService _cekEncryption;
+    private readonly DeviceKeyService _deviceKeyService;
+    private readonly CekPublicKeyEncryptionService _publicKeyEncryption;
     private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private const string CekKeyPrefix = "cek:";
@@ -35,7 +37,9 @@ public class LicenseService
         ILogger<LicenseService> logger,
         IConfiguration configuration,
         AuditService auditService,
-        CekEncryptionService cekEncryption)
+        CekEncryptionService cekEncryption,
+        DeviceKeyService deviceKeyService,
+        CekPublicKeyEncryptionService publicKeyEncryption)
     {
         _redisDb = redisDb;
         _dbContext = dbContext;
@@ -43,22 +47,30 @@ public class LicenseService
         _configuration = configuration;
         _auditService = auditService;
         _cekEncryption = cekEncryption;
+        _deviceKeyService = deviceKeyService;
+        _publicKeyEncryption = publicKeyEncryption;
     }
 
     /// <summary>
     /// Pobiera wszystkie licencje (CEK) dla wszystkich dostępnych jakości contentu w jednym requeście.
-    /// Zwraca klucze dla wszystkich jakości dozwolonych w ramach planu użytkownika.
-    /// Upraszcza logikę po stronie klienta - nie trzeba wykonywać osobnych requestów dla każdej jakości.
+    /// Zwraca klucze zaszyfrowane public keyem urządzenia.
+    /// CEK szyfrowany public keyem RSA przed wysłaniem do klienta.
     /// </summary>
     public async Task<MultiQualityLicenseResponse> GetAllLicensesAsync(
         string contentId,
         User user,
+        string deviceId,
         CancellationToken ct = default)
     {
         // Walidacja parametrów
         if (string.IsNullOrWhiteSpace(contentId))
         {
             throw new ValidationException("Content ID nie może być pusty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            throw new ValidationException("Device ID nie może być pusty.");
         }
 
         // Path traversal protection
@@ -113,10 +125,6 @@ public class LicenseService
             );
         }
 
-        // Sprawdza limit konkurencyjnych stream-ów (dla dowolnej jakości, bo user dostanie wszystkie klucze)
-        // Używamy pustego string jako quality bo sprawdzamy ogólny limit, nie dla konkretnej jakości
-        await CheckConcurrentStreamLimitAsync(user.UserId, contentId, string.Empty, user.Plan, ct);
-
         // Pobiera rzeczywiście dostępne jakości dla tego contentu i planu użytkownika
         var availableQualities = await GetAvailableQualitiesAsync(contentId, user.Plan, ct);
 
@@ -138,12 +146,27 @@ public class LicenseService
             );
         }
 
+        // Pobiera public key urządzenia (walidacja że urządzenie jest zarejestrowane)
+        string publicKeyPem;
+        try
+        {
+            publicKeyPem = await _deviceKeyService.GetDevicePublicKeyAsync(user.UserId, deviceId, ct);
+        }
+        catch (NotFoundException)
+        {
+            _logger.LogWarning("Device not found for user {UserId}: {DeviceId}", user.UserId, deviceId);
+            throw new NotFoundException(
+                $"Urządzenie '{deviceId}' nie jest zarejestrowane. Zarejestruj urządzenie na POST /api/device/register",
+                deviceId
+            );
+        }
+
         // Oblicza czas wygaśnięcia licencji (wspólny dla wszystkich jakości)
         var expirationHours = _configuration.GetValue<int>("License:ExpirationHours", 8);
         var expiresAt = DateTime.UtcNow.AddHours(expirationHours);
 
-        // Pobiera CEK-i dla wszystkich dostępnych jakości
-        var licenses = new List<QualityLicense>();
+        // Pobiera i deszyfruje wszystkie CEK-i (przed rozpoczęciem transakcji DB)
+        var decryptedCeks = new List<(string quality, string decryptedKey, string keyId)>();
 
         foreach (var quality in availableQualities)
         {
@@ -154,7 +177,7 @@ public class LicenseService
             if (!cekJson.HasValue)
             {
                 _logger.LogWarning("CEK not found for {ContentId} quality {Quality} - skipping this quality", contentId, quality);
-                continue; // Pomija tę jakość jeśli CEK nie istnieje
+                continue;
             }
 
             var encryptedCekData = JsonSerializer.Deserialize<EncryptedCekData>(cekJson.ToString(), _jsonOptions);
@@ -174,26 +197,18 @@ public class LicenseService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to decrypt CEK for {ContentId}:{Quality} - skipping", contentId, quality);
-                continue; // Pomija tę jakość w przypadku błędu deszyfrowania
+                continue;
             }
 
-            licenses.Add(new QualityLicense
-            {
-                Quality = quality,
-                Key = decryptedKey,
-                KeyId = encryptedCekData.KeyId
-            });
-
-            _logger.LogDebug("Added license for quality {Quality} to multi-quality response", quality);
+            decryptedCeks.Add((quality, decryptedKey, encryptedCekData.KeyId));
+            _logger.LogDebug("Decrypted CEK for quality {Quality}", quality);
         }
 
-        // Sprawdza czy udało się pobrać przynajmniej jeden klucz
-        if (licenses.Count == 0)
+        if (decryptedCeks.Count == 0)
         {
             _logger.LogError("Failed to retrieve any CEK for content {ContentId}, available qualities: {Qualities}",
                 contentId, string.Join(", ", availableQualities));
 
-            // Audit log
             _ = _auditService.LogLicenseRejectedAsync(
                 user.UserId, contentId, "all",
                 "Failed to retrieve any CEK",
@@ -205,19 +220,62 @@ public class LicenseService
             );
         }
 
+        using var transaction = await _dbContext.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct);
+
+        try
+        {
+            // Sprawdza limit konkurencyjnych stream-ów w transkacji
+            await CheckConcurrentStreamLimitAsync(user.UserId, contentId, string.Empty, user.Plan, ct);
+
+            // Zapisuje informację o wydanych licencjach w transkacji
+            foreach (var (quality, _, _) in decryptedCeks)
+            {
+                await SaveIssuedLicenseAsync(user.UserId, contentId, quality, expiresAt, ct);
+            }
+
+            await transaction.CommitAsync(ct);
+        }
+        catch (Exception)
+        {
+            await transaction.RollbackAsync(ct);
+            throw;
+        }
+
+        // Po udanym zapisie szyfruje CEK public keyem urządzenia
+        var licenses = new List<QualityLicense>();
+        foreach (var (quality, decryptedKey, keyId) in decryptedCeks)
+        {
+            // Szyfruje CEK public keyem RSA przed wysłaniem
+            string encryptedCekForDevice;
+            try
+            {
+                encryptedCekForDevice = _publicKeyEncryption.EncryptCekWithPublicKey(decryptedKey, publicKeyPem);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to encrypt CEK with device public key for quality {Quality}", quality);
+                // W tym momencie licencja jest już zapisana w DB - skip
+                continue;
+            }
+
+            licenses.Add(new QualityLicense
+            {
+                Quality = quality,
+                EncryptedKey = encryptedCekForDevice, // Zaszyfrowany public keyem RSA
+                KeyId = keyId
+            });
+
+            _logger.LogDebug("Encrypted CEK for quality {Quality} with device public key", quality);
+        }
+
         _logger.LogInformation(
-            "Multi-quality license issued for user {UserId} (plan: {Plan}) - content {ContentId}, qualities: {Qualities}, expires at {ExpiresAt}",
-            user.UserId, user.Plan, contentId, string.Join(", ", licenses.Select(l => l.Quality)), expiresAt);
+            "Multi-quality license issued for user {UserId} (plan: {Plan}, device: {DeviceId}) - content {ContentId}, qualities: {Qualities}, expires at {ExpiresAt}",
+            user.UserId, user.Plan, deviceId, contentId, string.Join(", ", licenses.Select(l => l.Quality)), expiresAt);
 
         // Audit log
         await _auditService.LogLicenseIssuedAsync(
             user.UserId, contentId, $"multi({licenses.Count})", user.Plan, expiresAt, ct);
-
-        // Zapisuje informację o wydanych licencjach (dla każdej jakości osobno - potrzebne do concurrent streams tracking)
-        foreach (var license in licenses)
-        {
-            await SaveIssuedLicenseAsync(user.UserId, contentId, license.Quality, expiresAt, ct);
-        }
 
         return new MultiQualityLicenseResponse
         {
@@ -227,64 +285,6 @@ public class LicenseService
             ExpiresAt = expiresAt,
             Licenses = licenses
         };
-    }
-
-    /// <summary>
-    /// Odnawia licencje (CEK) dla contentu. Sprawdza czy odnowienie jest możliwe
-    /// w oparciu o RenewalThresholdMinutes.
-    /// Zwraca nowe klucze dla wszystkich dostępnych jakości.
-    /// </summary>
-    public async Task<MultiQualityLicenseResponse> RenewAllLicensesAsync(
-        string contentId,
-        User user,
-        CancellationToken ct = default)
-    {
-        // Sprawdza czy istnieją poprzednie licencje dla tego contentu
-        var existingLicenses = await _dbContext.IssuedLicenses
-            .Where(l =>
-                l.UserId == user.UserId &&
-                l.ContentId == contentId &&
-                l.ExpiresAt > DateTime.UtcNow)
-            .ToListAsync(ct);
-
-        if (existingLicenses.Any())
-        {
-            // Licencje istnieją i są nadal ważne - sprawdza threshold dla najdłużej ważnej
-            var renewalThresholdMinutes = _configuration.GetValue<int>("License:RenewalThresholdMinutes", 30);
-            var longestExpiringLicense = existingLicenses.MaxBy(l => l.ExpiresAt);
-            var timeLeft = longestExpiringLicense!.ExpiresAt - DateTime.UtcNow;
-
-            if (timeLeft.TotalMinutes > renewalThresholdMinutes)
-            {
-                _logger.LogWarning(
-                    "License renewal too early for user {UserId} - content {ContentId}. Time left: {TimeLeft}min, threshold: {Threshold}min",
-                    user.UserId, contentId, (int)timeLeft.TotalMinutes, renewalThresholdMinutes);
-
-                throw new ValidationException(
-                    $"Licencja jest nadal ważna przez {(int)timeLeft.TotalMinutes} minut. " +
-                    $"Odnowienie możliwe dopiero za {(int)(timeLeft.TotalMinutes - renewalThresholdMinutes)} minut.",
-                    new Dictionary<string, object>
-                    {
-                        ["currentExpiresAt"] = longestExpiringLicense.ExpiresAt,
-                        ["timeLeftMinutes"] = (int)timeLeft.TotalMinutes,
-                        ["renewalThresholdMinutes"] = renewalThresholdMinutes,
-                        ["canRenewAt"] = DateTime.UtcNow.AddMinutes(timeLeft.TotalMinutes - renewalThresholdMinutes)
-                    });
-            }
-        }
-
-        // Jeśli odnowienie dozwolone - wydaje nowe licencje
-        var licenses = await GetAllLicensesAsync(contentId, user, ct);
-
-        // Audit log dla renewal
-        await _auditService.LogLicenseRenewedAsync(
-            user.UserId, contentId, $"multi({licenses.Count})", user.Plan, licenses.ExpiresAt, ct);
-
-        _logger.LogInformation(
-            "Licenses renewed successfully for user {UserId} - content {ContentId}, qualities: {Qualities}",
-            user.UserId, contentId, string.Join(", ", licenses.Licenses.Select(l => l.Quality)));
-
-        return licenses;
     }
 
     /// <summary>
@@ -485,9 +485,10 @@ public class LicenseService
     /// <summary>
     /// Sprawdza limit concurrent streams dla użytkownika.
     /// free/basic: max 1 stream, pro: max 2 streamy jednocześnie.
-    /// FIXED: Używa Serializable isolation level aby zapobiec race condition.
-    /// FIXED: Liczy unikalne content ID (jeden content = jeden stream, niezależnie od liczby jakości).
-    /// FIXED: Stream aktywny tylko jeśli LastHeartbeat < 2 minuty temu (heartbeat mechanism).
+    /// Działa w ramach zewnętrznej transakcji Serializable (zapobiega race condition).
+    /// Liczy unikalne content ID (jeden content = jeden stream, niezależnie od liczby jakości).
+    /// Stream aktywny tylko jeśli LastHeartbeat < 2 minuty temu (heartbeat mechanism).
+    /// Ta metoda MUSI być wywoływana w ramach Serializable transaction!
     /// </summary>
     private async Task CheckConcurrentStreamLimitAsync(
         string userId,
@@ -503,78 +504,54 @@ public class LicenseService
         var heartbeatTimeoutMinutes = _configuration.GetValue<int>("License:HeartbeatTimeoutMinutes", 2);
         var heartbeatCutoff = DateTime.UtcNow.AddMinutes(-heartbeatTimeoutMinutes);
 
-        // Używa Serializable transaction aby zapobiec race condition
-        // Bez tego 2 requesty mogły jednocześnie sprawdzić count=0 i oba przejść
-        using var transaction = await _dbContext.Database.BeginTransactionAsync(
-            System.Data.IsolationLevel.Serializable, ct);
+        // Pobiera wszystkie faktycznie aktywne licencje użytkownika z bazy danych
+        // Aktywny stream = ExpiresAt w przyszłości I LastHeartbeat świeży (< 2 min temu)
+        var activeLicenses = await _dbContext.IssuedLicenses
+            .Where(l =>
+                l.UserId == userId &&
+                l.ExpiresAt > DateTime.UtcNow &&
+                l.LastHeartbeat > heartbeatCutoff &&
+                l.ContentId != contentId)
+            .ToListAsync(ct);
 
-        try
-        {
-            // Pobiera wszystkie FAKTYCZNIE AKTYWNE licencje użytkownika z bazy danych
-            // Aktywny stream = ExpiresAt w przyszłości I LastHeartbeat świeży (< 2 min temu)
-            var activeLicenses = await _dbContext.IssuedLicenses
-                .Where(l =>
-                    l.UserId == userId &&
-                    l.ExpiresAt > DateTime.UtcNow &&
-                    l.LastHeartbeat > heartbeatCutoff && // NOWE: tylko świeże heartbeaty
-                    // Pomija licencje dla tego samego contentu (wszystkie jakości)
-                    // bo właśnie odnawiane lub pobierane po raz pierwszy
-                    l.ContentId != contentId)
-                .ToListAsync(ct);
+        // Liczy unikalne content ID - każdy content to jeden stream niezależnie od liczby jakości
+        var uniqueContentIds = activeLicenses
+            .Select(l => l.ContentId)
+            .Distinct()
+            .ToList();
 
-            // Liczy unikalne content ID - każdy content to jeden stream niezależnie od liczby jakości
-            var uniqueContentIds = activeLicenses
-                .Select(l => l.ContentId)
-                .Distinct()
-                .ToList();
+        var activeStreams = uniqueContentIds.Count;
 
-            var activeStreams = uniqueContentIds.Count;
-
-            // Dla logowania - pokazuje wszystkie jakości i czas ostatniego heartbeatu
-            var activeStreamsList = activeLicenses
-                .GroupBy(l => l.ContentId)
-                .Select(g =>
-                {
-                    var lastHeartbeat = g.Max(l => l.LastHeartbeat);
-                    var secondsAgo = (int)(DateTime.UtcNow - lastHeartbeat).TotalSeconds;
-                    return $"{g.Key} ({string.Join(", ", g.Select(l => l.Quality))}, heartbeat {secondsAgo}s ago)";
-                })
-                .ToList();
-
-            // Sprawdza czy przekroczono limit
-            if (activeStreams >= limit)
+        // Dla logowania - pokazuje wszystkie jakości i czas ostatniego heartbeatu
+        var activeStreamsList = activeLicenses
+            .GroupBy(l => l.ContentId)
+            .Select(g =>
             {
-                _logger.LogWarning(
-                    "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
-                    userId, userPlan, activeStreams, limit, string.Join("; ", activeStreamsList));
+                var lastHeartbeat = g.Max(l => l.LastHeartbeat);
+                var secondsAgo = (int)(DateTime.UtcNow - lastHeartbeat).TotalSeconds;
+                return $"{g.Key} ({string.Join(", ", g.Select(l => l.Quality))}, heartbeat {secondsAgo}s ago)";
+            })
+            .ToList();
 
-                await transaction.RollbackAsync(ct);
-
-                throw new ForbiddenException(
-                    $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
-                    $"Aktualnie aktywne streamy ({activeStreams}): {string.Join("; ", activeStreamsList)}. " +
-                    "Zamknij jeden z aktywnych streamów.",
-                    new Dictionary<string, object>
-                    {
-                        ["userPlan"] = userPlan,
-                        ["limit"] = limit,
-                        ["activeStreams"] = activeStreams,
-                        ["activeContentIds"] = uniqueContentIds
-                    }
-                );
-            }
-
-            await transaction.CommitAsync(ct);
-        }
-        catch (ForbiddenException)
+        // Sprawdza czy przekroczono limit
+        if (activeStreams >= limit)
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error checking concurrent stream limit for user {UserId}", userId);
-            await transaction.RollbackAsync(ct);
-            throw;
+            _logger.LogWarning(
+                "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
+                userId, userPlan, activeStreams, limit, string.Join("; ", activeStreamsList));
+
+            throw new ForbiddenException(
+                $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
+                $"Aktualnie aktywne streamy ({activeStreams}): {string.Join("; ", activeStreamsList)}. " +
+                "Zamknij jeden z aktywnych streamów.",
+                new Dictionary<string, object>
+                {
+                    ["userPlan"] = userPlan,
+                    ["limit"] = limit,
+                    ["activeStreams"] = activeStreams,
+                    ["activeContentIds"] = uniqueContentIds
+                }
+            );
         }
     }
 
