@@ -60,29 +60,58 @@ public class LicenseService
             throw new ValidationException("Content ID nie może być pusty.");
         }
 
+        // Path traversal protection
+        if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
+        {
+            _logger.LogWarning("Path traversal attempt blocked in license request: {ContentId}", contentId);
+            throw new ValidationException("Nieprawidłowy format Content ID.");
+        }
+
         if (string.IsNullOrWhiteSpace(quality))
         {
             throw new ValidationException("Quality nie może być pusta.");
         }
 
-        // Pobiera metadane contentu (RequiredPlan)
+        // Walidacja quality format
+        if (!Qualities.IsValid(quality))
+        {
+            _logger.LogWarning("Invalid quality format in license request: {Quality}", quality);
+            throw new ValidationException($"Nieprawidłowa jakość: {quality}. Dozwolone: 480p, 720p, 1080p, 1440p, 2160p");
+        }
+
+        // Pobiera metadane contentu
         var contentMeta = await GetContentMetadataAsync(contentId, ct);
 
         if (contentMeta == null)
         {
             _logger.LogWarning("Content metadata not found for contentId: {ContentId}", contentId);
+
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, quality,
+                "Content not found",
+                ErrorCode.CONTENT_NOT_FOUND,
+                ct);
+
             throw new NotFoundException(
                 $"Content o ID '{contentId}' nie został znaleziony.",
                 contentId
             );
         }
 
-        // Sprawdza uprawnienia do contentu (RequiredPlan)
+        // Sprawdza uprawnienia do contentu
         if (!Plans.HasSufficientPlan(user.Plan, contentMeta.RequiredPlan))
         {
             _logger.LogWarning(
                 "Insufficient plan for user {UserId} (plan: {UserPlan}) to access content {ContentId} (required: {RequiredPlan})",
                 user.UserId, user.Plan, contentId, contentMeta.RequiredPlan);
+
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, quality,
+                $"Insufficient plan: {user.Plan} < {contentMeta.RequiredPlan}",
+                ErrorCode.FORBIDDEN,
+                ct);
 
             throw new ForbiddenException(
                 $"Twój plan ({user.Plan}) nie pozwala na odtworzenie tego contentu. Wymagany plan: {contentMeta.RequiredPlan}",
@@ -106,6 +135,13 @@ public class LicenseService
             _logger.LogWarning("No qualities available for content {ContentId} and user plan {Plan}",
                 contentId, user.Plan);
 
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, quality,
+                $"No qualities available for plan: {user.Plan}",
+                ErrorCode.CONTENT_NOT_FOUND,
+                ct);
+
             throw new NotFoundException(
                 $"Content '{contentId}' nie ma dostępnych jakości dla Twojego planu ({user.Plan}).",
                 contentId
@@ -120,6 +156,13 @@ public class LicenseService
             _logger.LogWarning(
                 "Quality {Quality} not available for user {UserId} (plan: {UserPlan}) on content {ContentId}. Available: {Available}",
                 quality, user.UserId, user.Plan, contentId, string.Join(", ", availableQualities));
+
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, quality,
+                $"Quality {quality} not available. Available: {string.Join(", ", availableQualities)}",
+                ErrorCode.FORBIDDEN,
+                ct);
 
             throw new ForbiddenException(
                 $"Jakość '{quality}' nie jest dostępna dla tego contentu. Dostępne jakości dla Twojego planu ({user.Plan}): {string.Join(", ", availableQualities)}",
@@ -141,6 +184,14 @@ public class LicenseService
         if (!cekJson.HasValue)
         {
             _logger.LogWarning("CEK not found for {ContentId} quality {Quality}", contentId, quality);
+
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, quality,
+                "CEK not found in Redis",
+                ErrorCode.CONTENT_NOT_FOUND,
+                ct);
+
             throw new NotFoundException(
                 $"Licencja dla contentu '{contentId}' w jakości '{quality}' nie została znaleziona.",
                 $"{contentId}:{quality}"
@@ -154,7 +205,7 @@ public class LicenseService
             throw new InternalServerException("Failed to deserialize CEK data.");
         }
 
-        // Deszyfruje CEK za pomocą master keya (envelope decryption)
+        // Deszyfruje CEK za pomocą master key-a
         string decryptedKey;
         try
         {
@@ -407,7 +458,7 @@ public class LicenseService
         var limit = _configuration.GetValue<int>($"License:ConcurrentStreamLimits:{userPlan}", 1);
 
         // Używa Serializable transaction aby zapobiec race condition
-        // Bez tego 2 requesty mogły jednocześnie sprawdzić count=0 i obie przejść
+        // Bez tego 2 requesty mogły jednocześnie sprawdzić count=0 i oba przejść
         using var transaction = await _dbContext.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable, ct);
 
@@ -434,7 +485,6 @@ public class LicenseService
                     "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
                     userId, userPlan, activeStreams, limit, string.Join(", ", activeStreamsList));
 
-                // Rollback transaction
                 await transaction.RollbackAsync(ct);
 
                 throw new ForbiddenException(
@@ -451,7 +501,6 @@ public class LicenseService
                 );
             }
 
-            // Commit transaction jeśli wszystko OK
             await transaction.CommitAsync(ct);
         }
         catch (ForbiddenException)

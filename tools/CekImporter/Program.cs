@@ -159,6 +159,24 @@ foreach (var contentDir in contentDirs)
             qualityCount++;
         }
 
+        var cachePattern = $"content:qualities:{contentId}:*";
+        try
+        {
+            var endpoints = redis.GetEndPoints();
+            var server = redis.GetServer(endpoints[0]);
+
+            var keysToDelete = server.Keys(pattern: cachePattern).ToArray();
+            if (keysToDelete.Length > 0)
+            {
+                db.KeyDelete(keysToDelete);
+                Console.WriteLine($"  Cache invalidated: {keysToDelete.Length} keys");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  [WARN] Cache invalidation failed: {ex.Message}");
+        }
+
         Console.WriteLine($"  Imported {qualityCount} qualities (encrypted + SET)\n");
         totalImported++;
     }

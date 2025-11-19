@@ -8,6 +8,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using StackExchange.Redis;
 
 namespace Nexa.DrmLicenseServer.Services;
 
@@ -20,6 +21,7 @@ public class AuthService
 {
     private readonly UserService _userService;
     private readonly NexaDbContext _dbContext;
+    private readonly IDatabase _redisDb;
     private readonly ILogger<AuthService> _logger;
     private readonly IConfiguration _configuration;
 
@@ -32,11 +34,13 @@ public class AuthService
     public AuthService(
         UserService userService,
         NexaDbContext dbContext,
+        IDatabase redisDb,
         ILogger<AuthService> logger,
         IConfiguration configuration)
     {
         _userService = userService;
         _dbContext = dbContext;
+        _redisDb = redisDb;
         _logger = logger;
         _configuration = configuration;
 
@@ -75,17 +79,60 @@ public class AuthService
 
     /// <summary>
     /// Loguje użytkownika.
+    /// Implementuje rate limiting per email.
     /// </summary>
     public async Task<AuthResponse> LoginAsync(LoginRequest request, CancellationToken ct = default)
     {
+        // Rate limiting: sprawdza liczbę nieudanych prób logowania
+        var attemptKey = $"login:attempts:{request.Email.ToLowerInvariant()}";
+        var attempts = await _redisDb.StringGetAsync(attemptKey);
+        var attemptCount = attempts.HasValue ? (int)attempts : 0;
+
+        var maxAttempts = _configuration.GetValue<int>("Auth:MaxLoginAttempts", 5);
+        var lockoutMinutes = _configuration.GetValue<int>("Auth:LoginLockoutMinutes", 15);
+
+        if (attemptCount >= maxAttempts)
+        {
+            var ttl = await _redisDb.KeyTimeToLiveAsync(attemptKey);
+            var lockoutRemaining = ttl.HasValue ? (int)ttl.Value.TotalMinutes : lockoutMinutes;
+
+            _logger.LogWarning(
+                "Login rate limit exceeded for email: {Email}. Attempts: {Attempts}/{Max}",
+                request.Email, attemptCount, maxAttempts);
+
+            throw new ForbiddenException(
+                $"Zbyt wiele nieudanych prób logowania. Konto zablokowane na {lockoutRemaining} minut.",
+                new Dictionary<string, object>
+                {
+                    ["email"] = request.Email,
+                    ["attempts"] = attemptCount,
+                    ["maxAttempts"] = maxAttempts,
+                    ["lockoutRemainingMinutes"] = lockoutRemaining
+                });
+        }
+
         var user = await _userService.GetUserByEmailAsync(request.Email, ct);
 
         if (user == null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
         {
-            _logger.LogWarning("Failed login attempt for email: {Email}", request.Email);
+            var newAttemptCount = await _redisDb.StringIncrementAsync(attemptKey);
+            if (newAttemptCount == 1)
+            {
+                // Gdy pierwsza nieudana próba to ustawia TTL
+                await _redisDb.KeyExpireAsync(attemptKey, TimeSpan.FromMinutes(lockoutMinutes));
+            }
+
+            _logger.LogWarning(
+                "Failed login attempt for email: {Email}. Attempt {Attempt}/{Max}",
+                request.Email, newAttemptCount, maxAttempts);
+
             throw new UnauthorizedException(
                 "Nieprawidłowy email lub hasło.",
-                new Dictionary<string, object> { ["email"] = request.Email }
+                new Dictionary<string, object>
+                {
+                    ["email"] = request.Email,
+                    ["remainingAttempts"] = Math.Max(0, maxAttempts - (int)newAttemptCount)
+                }
             );
         }
 
@@ -97,6 +144,9 @@ public class AuthService
             );
         }
 
+        // Sukces - resetuje counter
+        await _redisDb.KeyDeleteAsync(attemptKey);
+
         _logger.LogInformation("User logged in: {UserId}", user.UserId);
 
         return await GenerateAuthResponseAsync(user, ct);
@@ -104,7 +154,7 @@ public class AuthService
 
     /// <summary>
     /// Odświeża access token używając refresh tokenu.
-    /// FIXED: Hashuje podany token i porównuje z hashem w bazie.
+    /// Hashuje podany token i porównuje z hashem w bazie.
     /// </summary>
     public async Task<AuthResponse> RefreshTokenAsync(string refreshToken, CancellationToken ct = default)
     {

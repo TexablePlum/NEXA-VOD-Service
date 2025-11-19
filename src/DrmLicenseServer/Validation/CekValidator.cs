@@ -83,12 +83,12 @@ public static partial class CekValidator
 
     /// <summary>
     /// Generuje przykładowy CEK (16 bytes = 32 hex chars) do testów.
+    /// Używa kryptograficznie bezpiecznego RandomNumberGenerator.
     /// </summary>
     public static string GenerateSampleCek()
     {
-        var random = new Random();
         var bytes = new byte[16];
-        random.NextBytes(bytes);
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }
