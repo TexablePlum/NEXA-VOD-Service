@@ -92,6 +92,40 @@ public class AuditService
     }
 
     /// <summary>
+    /// Loguje cofnięcie (revoke) licencji.
+    /// </summary>
+    public async Task LogLicenseRevokedAsync(
+        string userId,
+        string contentId,
+        string quality,
+        string userPlan,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var entries = new NameValueEntry[]
+            {
+                new("action", "revoked"),
+                new("userId", userId),
+                new("contentId", contentId),
+                new("quality", quality),
+                new("userPlan", userPlan),
+                new("timestamp", DateTime.UtcNow.ToString("o"))
+            };
+
+            await _redisDb.StreamAddAsync(AuditStreamKey, entries);
+
+            _logger.LogDebug(
+                "Audit: License revoked - user {UserId}, content {ContentId}, quality {Quality}",
+                userId, contentId, quality);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to write audit log for license revoked");
+        }
+    }
+
+    /// <summary>
     /// Loguje odrzucenie żądania licencji (forbidden/not found).
     /// </summary>
     public async Task LogLicenseRejectedAsync(

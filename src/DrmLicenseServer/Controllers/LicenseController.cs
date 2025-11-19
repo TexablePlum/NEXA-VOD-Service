@@ -31,20 +31,19 @@ public class LicenseController : ControllerBase
     }
 
     /// <summary>
-    /// Pobiera licencję (CEK) dla contentu w określonej jakości.
+    /// Pobiera licencje (CEK) dla wszystkich dostępnych jakości contentu.
+    /// Zwraca klucze dla wszystkich jakości dozwolonych w ramach planu użytkownika.
     /// Wymaga tokenu JWT w header Authorization: Bearer {token}.
     /// </summary>
-    [HttpGet("{contentId}/{quality}")]
-    [ProducesResponseType(typeof(LicenseResponse), 200)]
+    [HttpGet("{contentId}")]
+    [ProducesResponseType(typeof(MultiQualityLicenseResponse), 200)]
     [ProducesResponseType(typeof(ErrorResponse), 401)]
     [ProducesResponseType(typeof(ErrorResponse), 403)]
     [ProducesResponseType(typeof(ErrorResponse), 404)]
-    public async Task<ActionResult<LicenseResponse>> GetLicense(
+    public async Task<ActionResult<MultiQualityLicenseResponse>> GetLicenses(
         string contentId,
-        string quality,
         CancellationToken ct)
     {
-        // Pobiera userId z JWT claims
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? User.FindFirst("sub")?.Value;
 
@@ -54,7 +53,6 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
         }
 
-        // Pobiera dane użytkownika
         var user = await _userService.GetUserByIdAsync(userId, ct);
 
         if (user == null || !user.IsActive)
@@ -62,28 +60,25 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
         }
 
-        // Pobiera licencję
-        var license = await _licenseService.GetLicenseAsync(contentId, quality, user, ct);
+        var licenses = await _licenseService.GetAllLicensesAsync(contentId, user, ct);
 
-        return Ok(license);
+        return Ok(licenses);
     }
 
     /// <summary>
-    /// Pobiera listę dostępnych jakości dla contentu.
-    /// Zwraca tylko jakości które faktycznie istnieją dla contentu
-    /// i są dozwolone dla planu użytkownika.
+    /// Odnawia licencje (CEK) dla contentu.
+    /// Pozwala odświeżyć licencje przed ich wygaśnięciem.
     /// Wymaga tokenu JWT w header Authorization: Bearer {token}.
     /// </summary>
-    [HttpGet("{contentId}/qualities")]
-    [ProducesResponseType(typeof(AvailableQualitiesResponse), 200)]
+    [HttpPost("{contentId}/renew")]
+    [ProducesResponseType(typeof(MultiQualityLicenseResponse), 200)]
     [ProducesResponseType(typeof(ErrorResponse), 401)]
     [ProducesResponseType(typeof(ErrorResponse), 403)]
     [ProducesResponseType(typeof(ErrorResponse), 404)]
-    public async Task<ActionResult<AvailableQualitiesResponse>> GetAvailableQualities(
+    public async Task<ActionResult<MultiQualityLicenseResponse>> RenewLicenses(
         string contentId,
         CancellationToken ct)
     {
-        // Pobiera userId z JWT claims
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? User.FindFirst("sub")?.Value;
 
@@ -93,7 +88,6 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
         }
 
-        // Pobiera dane użytkownika
         var user = await _userService.GetUserByIdAsync(userId, ct);
 
         if (user == null || !user.IsActive)
@@ -101,36 +95,25 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
         }
 
-        // Pobiera dostępne jakości
-        var qualities = await _licenseService.GetAvailableQualitiesForUserAsync(contentId, user, ct);
+        var licenses = await _licenseService.RenewAllLicensesAsync(contentId, user, ct);
 
-        var response = new AvailableQualitiesResponse
-        {
-            ContentId = contentId,
-            UserPlan = user.Plan,
-            MaxQuality = Nexa.Shared.Constants.Plans.GetMaxQuality(user.Plan),
-            Qualities = qualities
-        };
-
-        return Ok(response);
+        return Ok(licenses);
     }
 
     /// <summary>
-    /// Odnawia licencję (CEK) dla contentu w określonej jakości.
-    /// Pozwala odświeżyć licencję przed jej wygaśnięciem.
+    /// Aktualizuje heartbeat dla licencji contentu.
+    /// Klient powinien wysyłać heartbeat co 30-60 sekund podczas aktywnego odtwarzania.
+    /// Stream jest uznawany za aktywny tylko jeśli ostatni heartbeat był &lt; 2 minuty temu.
     /// Wymaga tokenu JWT w header Authorization: Bearer {token}.
     /// </summary>
-    [HttpPost("{contentId}/{quality}/renew")]
-    [ProducesResponseType(typeof(LicenseResponse), 200)]
+    [HttpPost("{contentId}/heartbeat")]
+    [ProducesResponseType(200)]
     [ProducesResponseType(typeof(ErrorResponse), 401)]
-    [ProducesResponseType(typeof(ErrorResponse), 403)]
     [ProducesResponseType(typeof(ErrorResponse), 404)]
-    public async Task<ActionResult<LicenseResponse>> RenewLicense(
+    public async Task<ActionResult> Heartbeat(
         string contentId,
-        string quality,
         CancellationToken ct)
     {
-        // Pobiera userId z JWT claims
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? User.FindFirst("sub")?.Value;
 
@@ -140,7 +123,6 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
         }
 
-        // Pobiera dane użytkownika
         var user = await _userService.GetUserByIdAsync(userId, ct);
 
         if (user == null || !user.IsActive)
@@ -148,9 +130,44 @@ public class LicenseController : ControllerBase
             throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
         }
 
-        // Odnawia licencję (sprawdza threshold i wydaje nową licencję)
-        var license = await _licenseService.RenewLicenseAsync(contentId, quality, user, ct);
+        await _licenseService.HeartbeatAsync(contentId, user, ct);
 
-        return Ok(license);
+        return Ok();
+    }
+
+    /// <summary>
+    /// Usuwa (revoke) licencje dla contentu - zwalnia slot concurrent stream.
+    /// Używane gdy user zatrzymuje odtwarzanie przed wygaśnięciem licencji.
+    /// ZABEZPIECZENIE: User może usunąć TYLKO SWOJE licencje (sprawdzane po userId z JWT).
+    /// Wymaga tokenu JWT w header Authorization: Bearer {token}.
+    /// </summary>
+    [HttpDelete("{contentId}")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(typeof(ErrorResponse), 401)]
+    [ProducesResponseType(typeof(ErrorResponse), 404)]
+    public async Task<ActionResult> RevokeLicense(
+        string contentId,
+        CancellationToken ct)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
+
+        if (string.IsNullOrEmpty(userId))
+        {
+            _logger.LogWarning("JWT token missing userId claim");
+            throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
+        }
+
+        var user = await _userService.GetUserByIdAsync(userId, ct);
+
+        if (user == null || !user.IsActive)
+        {
+            throw new UnauthorizedException("Użytkownik nie istnieje lub został dezaktywowany.");
+        }
+
+        // User może usunąć TYLKO SWOJE licencje - ownership check w RevokeLicenseAsync
+        await _licenseService.RevokeLicenseAsync(contentId, user, ct);
+
+        return Ok();
     }
 }

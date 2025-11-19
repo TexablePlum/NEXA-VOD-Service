@@ -46,11 +46,12 @@ public class LicenseService
     }
 
     /// <summary>
-    /// Pobiera licencję (CEK) dla contentu i sprawdza uprawnienia użytkownika.
+    /// Pobiera wszystkie licencje (CEK) dla wszystkich dostępnych jakości contentu w jednym requeście.
+    /// Zwraca klucze dla wszystkich jakości dozwolonych w ramach planu użytkownika.
+    /// Upraszcza logikę po stronie klienta - nie trzeba wykonywać osobnych requestów dla każdej jakości.
     /// </summary>
-    public async Task<LicenseResponse> GetLicenseAsync(
+    public async Task<MultiQualityLicenseResponse> GetAllLicensesAsync(
         string contentId,
-        string quality,
         User user,
         CancellationToken ct = default)
     {
@@ -63,20 +64,8 @@ public class LicenseService
         // Path traversal protection
         if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
         {
-            _logger.LogWarning("Path traversal attempt blocked in license request: {ContentId}", contentId);
+            _logger.LogWarning("Path traversal attempt blocked in multi-license request: {ContentId}", contentId);
             throw new ValidationException("Nieprawidłowy format Content ID.");
-        }
-
-        if (string.IsNullOrWhiteSpace(quality))
-        {
-            throw new ValidationException("Quality nie może być pusta.");
-        }
-
-        // Walidacja quality format
-        if (!Qualities.IsValid(quality))
-        {
-            _logger.LogWarning("Invalid quality format in license request: {Quality}", quality);
-            throw new ValidationException($"Nieprawidłowa jakość: {quality}. Dozwolone: 480p, 720p, 1080p, 1440p, 2160p");
         }
 
         // Pobiera metadane contentu
@@ -88,7 +77,7 @@ public class LicenseService
 
             // Audit log
             _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, quality,
+                user.UserId, contentId, "all",
                 "Content not found",
                 ErrorCode.CONTENT_NOT_FOUND,
                 ct);
@@ -108,7 +97,7 @@ public class LicenseService
 
             // Audit log
             _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, quality,
+                user.UserId, contentId, "all",
                 $"Insufficient plan: {user.Plan} < {contentMeta.RequiredPlan}",
                 ErrorCode.FORBIDDEN,
                 ct);
@@ -124,8 +113,9 @@ public class LicenseService
             );
         }
 
-        // Sprawdza limit konkurencyjnych stream-ów
-        await CheckConcurrentStreamLimitAsync(user.UserId, contentId, quality, user.Plan, ct);
+        // Sprawdza limit konkurencyjnych stream-ów (dla dowolnej jakości, bo user dostanie wszystkie klucze)
+        // Używamy pustego string jako quality bo sprawdzamy ogólny limit, nie dla konkretnej jakości
+        await CheckConcurrentStreamLimitAsync(user.UserId, contentId, string.Empty, user.Plan, ct);
 
         // Pobiera rzeczywiście dostępne jakości dla tego contentu i planu użytkownika
         var availableQualities = await GetAvailableQualitiesAsync(contentId, user.Plan, ct);
@@ -137,7 +127,7 @@ public class LicenseService
 
             // Audit log
             _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, quality,
+                user.UserId, contentId, "all",
                 $"No qualities available for plan: {user.Plan}",
                 ErrorCode.CONTENT_NOT_FOUND,
                 ct);
@@ -148,136 +138,134 @@ public class LicenseService
             );
         }
 
-        // Sprawdza czy żądana jakość jest dostępna dla tego contentu i planu użytkownika
-        if (!availableQualities.Contains(quality))
-        {
-            var maxQuality = Plans.GetMaxQuality(user.Plan);
-
-            _logger.LogWarning(
-                "Quality {Quality} not available for user {UserId} (plan: {UserPlan}) on content {ContentId}. Available: {Available}",
-                quality, user.UserId, user.Plan, contentId, string.Join(", ", availableQualities));
-
-            // Audit log
-            _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, quality,
-                $"Quality {quality} not available. Available: {string.Join(", ", availableQualities)}",
-                ErrorCode.FORBIDDEN,
-                ct);
-
-            throw new ForbiddenException(
-                $"Jakość '{quality}' nie jest dostępna dla tego contentu. Dostępne jakości dla Twojego planu ({user.Plan}): {string.Join(", ", availableQualities)}",
-                new Dictionary<string, object>
-                {
-                    ["userPlan"] = user.Plan,
-                    ["requestedQuality"] = quality,
-                    ["maxQualityForPlan"] = maxQuality,
-                    ["availableQualities"] = availableQualities,
-                    ["contentId"] = contentId
-                }
-            );
-        }
-
-        // Pobiera CEK dla tej jakości (zaszyfrowany w Redis)
-        var cekKey = $"{CekKeyPrefix}{contentId}:{quality}";
-        var cekJson = await _redisDb.StringGetAsync(cekKey);
-
-        if (!cekJson.HasValue)
-        {
-            _logger.LogWarning("CEK not found for {ContentId} quality {Quality}", contentId, quality);
-
-            // Audit log
-            _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, quality,
-                "CEK not found in Redis",
-                ErrorCode.CONTENT_NOT_FOUND,
-                ct);
-
-            throw new NotFoundException(
-                $"Licencja dla contentu '{contentId}' w jakości '{quality}' nie została znaleziona.",
-                $"{contentId}:{quality}"
-            );
-        }
-
-        var encryptedCekData = JsonSerializer.Deserialize<EncryptedCekData>(cekJson.ToString(), _jsonOptions);
-
-        if (encryptedCekData == null)
-        {
-            throw new InternalServerException("Failed to deserialize CEK data.");
-        }
-
-        // Deszyfruje CEK za pomocą master key-a
-        string decryptedKey;
-        try
-        {
-            decryptedKey = _cekEncryption.Decrypt(encryptedCekData.EncryptedKey);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to decrypt CEK for {ContentId}:{Quality}", contentId, quality);
-            throw new InternalServerException("Failed to decrypt license key. Please contact support.");
-        }
-
-        // Oblicza czas wygaśnięcia licencji
+        // Oblicza czas wygaśnięcia licencji (wspólny dla wszystkich jakości)
         var expirationHours = _configuration.GetValue<int>("License:ExpirationHours", 8);
         var expiresAt = DateTime.UtcNow.AddHours(expirationHours);
 
+        // Pobiera CEK-i dla wszystkich dostępnych jakości
+        var licenses = new List<QualityLicense>();
+
+        foreach (var quality in availableQualities)
+        {
+            // Pobiera CEK dla tej jakości (zaszyfrowany w Redis)
+            var cekKey = $"{CekKeyPrefix}{contentId}:{quality}";
+            var cekJson = await _redisDb.StringGetAsync(cekKey);
+
+            if (!cekJson.HasValue)
+            {
+                _logger.LogWarning("CEK not found for {ContentId} quality {Quality} - skipping this quality", contentId, quality);
+                continue; // Pomija tę jakość jeśli CEK nie istnieje
+            }
+
+            var encryptedCekData = JsonSerializer.Deserialize<EncryptedCekData>(cekJson.ToString(), _jsonOptions);
+
+            if (encryptedCekData == null)
+            {
+                _logger.LogWarning("Failed to deserialize CEK data for {ContentId} quality {Quality} - skipping", contentId, quality);
+                continue;
+            }
+
+            // Deszyfruje CEK za pomocą master key-a
+            string decryptedKey;
+            try
+            {
+                decryptedKey = _cekEncryption.Decrypt(encryptedCekData.EncryptedKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to decrypt CEK for {ContentId}:{Quality} - skipping", contentId, quality);
+                continue; // Pomija tę jakość w przypadku błędu deszyfrowania
+            }
+
+            licenses.Add(new QualityLicense
+            {
+                Quality = quality,
+                Key = decryptedKey,
+                KeyId = encryptedCekData.KeyId
+            });
+
+            _logger.LogDebug("Added license for quality {Quality} to multi-quality response", quality);
+        }
+
+        // Sprawdza czy udało się pobrać przynajmniej jeden klucz
+        if (licenses.Count == 0)
+        {
+            _logger.LogError("Failed to retrieve any CEK for content {ContentId}, available qualities: {Qualities}",
+                contentId, string.Join(", ", availableQualities));
+
+            // Audit log
+            _ = _auditService.LogLicenseRejectedAsync(
+                user.UserId, contentId, "all",
+                "Failed to retrieve any CEK",
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                ct);
+
+            throw new InternalServerException(
+                $"Nie udało się pobrać kluczy szyfrujących dla contentu '{contentId}'. Skontaktuj się z supportem."
+            );
+        }
+
         _logger.LogInformation(
-            "License issued for user {UserId} (plan: {Plan}) - content {ContentId} quality {Quality}, expires at {ExpiresAt}",
-            user.UserId, user.Plan, contentId, quality, expiresAt);
+            "Multi-quality license issued for user {UserId} (plan: {Plan}) - content {ContentId}, qualities: {Qualities}, expires at {ExpiresAt}",
+            user.UserId, user.Plan, contentId, string.Join(", ", licenses.Select(l => l.Quality)), expiresAt);
 
         // Audit log
         await _auditService.LogLicenseIssuedAsync(
-            user.UserId, contentId, quality, user.Plan, expiresAt, ct);
+            user.UserId, contentId, $"multi({licenses.Count})", user.Plan, expiresAt, ct);
 
-        // Zapisuje informację o wydanej licencji
-        await SaveIssuedLicenseAsync(user.UserId, contentId, quality, expiresAt, ct);
-
-        return new LicenseResponse
+        // Zapisuje informację o wydanych licencjach (dla każdej jakości osobno - potrzebne do concurrent streams tracking)
+        foreach (var license in licenses)
         {
-            Key = decryptedKey,
-            KeyId = encryptedCekData.KeyId,
-            Quality = quality,
+            await SaveIssuedLicenseAsync(user.UserId, contentId, license.Quality, expiresAt, ct);
+        }
+
+        return new MultiQualityLicenseResponse
+        {
             ContentId = contentId,
-            ExpiresAt = expiresAt
+            UserPlan = user.Plan,
+            MaxQuality = Plans.GetMaxQuality(user.Plan),
+            ExpiresAt = expiresAt,
+            Licenses = licenses
         };
     }
 
     /// <summary>
-    /// Odnawia licencję (CEK) dla contentu. Sprawdza czy odnowienie jest możliwe
+    /// Odnawia licencje (CEK) dla contentu. Sprawdza czy odnowienie jest możliwe
     /// w oparciu o RenewalThresholdMinutes.
+    /// Zwraca nowe klucze dla wszystkich dostępnych jakości.
     /// </summary>
-    public async Task<LicenseResponse> RenewLicenseAsync(
+    public async Task<MultiQualityLicenseResponse> RenewAllLicensesAsync(
         string contentId,
-        string quality,
         User user,
         CancellationToken ct = default)
     {
-        // Sprawdza czy istnieje poprzednia licencja w bazie danych
-        var licenseEntity = await _dbContext.IssuedLicenses
-            .FirstOrDefaultAsync(l =>
+        // Sprawdza czy istnieją poprzednie licencje dla tego contentu
+        var existingLicenses = await _dbContext.IssuedLicenses
+            .Where(l =>
                 l.UserId == user.UserId &&
                 l.ContentId == contentId &&
-                l.Quality == quality &&
-                l.ExpiresAt > DateTime.UtcNow, ct);
+                l.ExpiresAt > DateTime.UtcNow)
+            .ToListAsync(ct);
 
-        if (licenseEntity != null)
+        if (existingLicenses.Any())
         {
-            // Licencja istnieje i jest nadal ważna
+            // Licencje istnieją i są nadal ważne - sprawdza threshold dla najdłużej ważnej
             var renewalThresholdMinutes = _configuration.GetValue<int>("License:RenewalThresholdMinutes", 30);
-            var timeLeft = licenseEntity.ExpiresAt - DateTime.UtcNow;
+            var longestExpiringLicense = existingLicenses.MaxBy(l => l.ExpiresAt);
+            var timeLeft = longestExpiringLicense!.ExpiresAt - DateTime.UtcNow;
 
             if (timeLeft.TotalMinutes > renewalThresholdMinutes)
             {
                 _logger.LogWarning(
-                    "License renewal too early for user {UserId} - content {ContentId} quality {Quality}. Time left: {TimeLeft}min, threshold: {Threshold}min",
-                    user.UserId, contentId, quality, (int)timeLeft.TotalMinutes, renewalThresholdMinutes);
+                    "License renewal too early for user {UserId} - content {ContentId}. Time left: {TimeLeft}min, threshold: {Threshold}min",
+                    user.UserId, contentId, (int)timeLeft.TotalMinutes, renewalThresholdMinutes);
 
                 throw new ValidationException(
                     $"Licencja jest nadal ważna przez {(int)timeLeft.TotalMinutes} minut. " +
                     $"Odnowienie możliwe dopiero za {(int)(timeLeft.TotalMinutes - renewalThresholdMinutes)} minut.",
                     new Dictionary<string, object>
                     {
-                        ["currentExpiresAt"] = licenseEntity.ExpiresAt,
+                        ["currentExpiresAt"] = longestExpiringLicense.ExpiresAt,
                         ["timeLeftMinutes"] = (int)timeLeft.TotalMinutes,
                         ["renewalThresholdMinutes"] = renewalThresholdMinutes,
                         ["canRenewAt"] = DateTime.UtcNow.AddMinutes(timeLeft.TotalMinutes - renewalThresholdMinutes)
@@ -285,73 +273,125 @@ public class LicenseService
             }
         }
 
-        // Jeśli odnowienie dozwolone - wydaje nową licencję
-        var license = await GetLicenseAsync(contentId, quality, user, ct);
+        // Jeśli odnowienie dozwolone - wydaje nowe licencje
+        var licenses = await GetAllLicensesAsync(contentId, user, ct);
 
         // Audit log dla renewal
         await _auditService.LogLicenseRenewedAsync(
-            user.UserId, contentId, quality, user.Plan, license.ExpiresAt!.Value, ct);
+            user.UserId, contentId, $"multi({licenses.Count})", user.Plan, licenses.ExpiresAt, ct);
 
         _logger.LogInformation(
-            "License renewed successfully for user {UserId} - content {ContentId} quality {Quality}",
-            user.UserId, contentId, quality);
+            "Licenses renewed successfully for user {UserId} - content {ContentId}, qualities: {Qualities}",
+            user.UserId, contentId, string.Join(", ", licenses.Licenses.Select(l => l.Quality)));
 
-        return license;
+        return licenses;
     }
 
     /// <summary>
-    /// Pobiera listę dostępnych jakości dla contentu i użytkownika.
-    /// Sprawdza uprawnienia do contentu i zwraca tylko jakości dozwolone dla planu użytkownika.
+    /// Aktualizuje heartbeat dla licencji contentu.
+    /// Klient powinien wysyłać heartbeat co 30-60 sekund podczas aktywnego odtwarzania.
+    /// Stream jest uznawany za aktywny tylko jeśli ostatni heartbeat był < 2 minuty temu.
     /// </summary>
-    public async Task<List<string>> GetAvailableQualitiesForUserAsync(
+    public async Task HeartbeatAsync(
         string contentId,
         User user,
         CancellationToken ct = default)
     {
-        // Walidacja parametrów
+        // Walidacja
         if (string.IsNullOrWhiteSpace(contentId))
         {
             throw new ValidationException("Content ID nie może być pusty.");
         }
 
-        // Pobiera metadane contentu (RequiredPlan)
-        var contentMeta = await GetContentMetadataAsync(contentId, ct);
-
-        if (contentMeta == null)
+        // Path traversal protection
+        if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
         {
-            _logger.LogWarning("Content metadata not found for contentId: {ContentId}", contentId);
+            _logger.LogWarning("Path traversal attempt blocked in heartbeat request: {ContentId}", contentId);
+            throw new ValidationException("Nieprawidłowy format Content ID.");
+        }
+
+        // Aktualizuje LastHeartbeat dla wszystkich jakości tego contentu dla tego usera
+        var licenses = await _dbContext.IssuedLicenses
+            .Where(l =>
+                l.UserId == user.UserId &&
+                l.ContentId == contentId &&
+                l.ExpiresAt > DateTime.UtcNow)
+            .ToListAsync(ct);
+
+        if (licenses.Count == 0)
+        {
+            _logger.LogWarning(
+                "Heartbeat for non-existent license - user {UserId}, content {ContentId}",
+                user.UserId, contentId);
+
             throw new NotFoundException(
-                $"Content o ID '{contentId}' nie został znaleziony.",
+                $"Nie znaleziono aktywnej licencji dla contentu '{contentId}'.",
                 contentId
             );
         }
 
-        // Sprawdza uprawnienia do contentu (RequiredPlan)
-        if (!Plans.HasSufficientPlan(user.Plan, contentMeta.RequiredPlan))
+        var now = DateTime.UtcNow;
+        foreach (var license in licenses)
+        {
+            license.LastHeartbeat = now;
+        }
+
+        await _dbContext.SaveChangesAsync(ct);
+
+        _logger.LogDebug(
+            "Heartbeat updated for user {UserId}, content {ContentId}, qualities: {Qualities}",
+            user.UserId, contentId, string.Join(", ", licenses.Select(l => l.Quality)));
+    }
+
+    /// <summary>
+    /// Usuwa (revoke) licencje dla contentu - zwalnia slot concurrent stream.
+    /// Wymaga że user jest właścicielem licencji (sprawdzane po userId).
+    /// Używane gdy user zatrzymuje odtwarzanie przed wygaśnięciem licencji.
+    /// </summary>
+    public async Task RevokeLicenseAsync(
+        string contentId,
+        User user,
+        CancellationToken ct = default)
+    {
+        // Walidacja
+        if (string.IsNullOrWhiteSpace(contentId))
+        {
+            throw new ValidationException("Content ID nie może być pusty.");
+        }
+
+        // Path traversal protection
+        if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
+        {
+            _logger.LogWarning("Path traversal attempt blocked in revoke request: {ContentId}", contentId);
+            throw new ValidationException("Nieprawidłowy format Content ID.");
+        }
+
+        // Usuwa licencje dla tego contentu tylko dla tego usera
+        var deletedCount = await _dbContext.IssuedLicenses
+            .Where(l =>
+                l.UserId == user.UserId &&
+                l.ContentId == contentId)
+            .ExecuteDeleteAsync(ct);
+
+        if (deletedCount == 0)
         {
             _logger.LogWarning(
-                "Insufficient plan for user {UserId} (plan: {UserPlan}) to access content {ContentId} (required: {RequiredPlan})",
-                user.UserId, user.Plan, contentId, contentMeta.RequiredPlan);
+                "Revoke attempt for non-existent license - user {UserId}, content {ContentId}",
+                user.UserId, contentId);
 
-            throw new ForbiddenException(
-                $"Twój plan ({user.Plan}) nie pozwala na odtworzenie tego contentu. Wymagany plan: {contentMeta.RequiredPlan}",
-                new Dictionary<string, object>
-                {
-                    ["userPlan"] = user.Plan,
-                    ["requiredPlan"] = contentMeta.RequiredPlan,
-                    ["contentId"] = contentId
-                }
+            throw new NotFoundException(
+                $"Nie znaleziono licencji dla contentu '{contentId}'.",
+                contentId
             );
         }
 
-        // Pobiera dostępne jakości dla contentu i planu użytkownika
-        var availableQualities = await GetAvailableQualitiesAsync(contentId, user.Plan, ct);
-
         _logger.LogInformation(
-            "Available qualities for user {UserId} (plan: {Plan}) on content {ContentId}: {Qualities}",
-            user.UserId, user.Plan, contentId, string.Join(", ", availableQualities));
+            "License revoked for user {UserId}, content {ContentId}, deleted {Count} license records",
+            user.UserId, contentId, deletedCount);
 
-        return availableQualities;
+        // Audit log
+        await _auditService.LogLicenseRevokedAsync(
+            user.UserId, contentId, "manual", user.Plan, ct);
     }
 
     /// <summary>
@@ -446,6 +486,8 @@ public class LicenseService
     /// Sprawdza limit concurrent streams dla użytkownika.
     /// free/basic: max 1 stream, pro: max 2 streamy jednocześnie.
     /// FIXED: Używa Serializable isolation level aby zapobiec race condition.
+    /// FIXED: Liczy unikalne content ID (jeden content = jeden stream, niezależnie od liczby jakości).
+    /// FIXED: Stream aktywny tylko jeśli LastHeartbeat < 2 minuty temu (heartbeat mechanism).
     /// </summary>
     private async Task CheckConcurrentStreamLimitAsync(
         string userId,
@@ -457,6 +499,10 @@ public class LicenseService
         // Pobiera limit dla planu użytkownika
         var limit = _configuration.GetValue<int>($"License:ConcurrentStreamLimits:{userPlan}", 1);
 
+        // Heartbeat timeout - stream jest aktywny tylko jeśli ostatni heartbeat < 2 minuty temu
+        var heartbeatTimeoutMinutes = _configuration.GetValue<int>("License:HeartbeatTimeoutMinutes", 2);
+        var heartbeatCutoff = DateTime.UtcNow.AddMinutes(-heartbeatTimeoutMinutes);
+
         // Używa Serializable transaction aby zapobiec race condition
         // Bez tego 2 requesty mogły jednocześnie sprawdzić count=0 i oba przejść
         using var transaction = await _dbContext.Database.BeginTransactionAsync(
@@ -464,18 +510,35 @@ public class LicenseService
 
         try
         {
-            // Pobiera wszystkie aktywne licencje użytkownika z bazy danych
+            // Pobiera wszystkie FAKTYCZNIE AKTYWNE licencje użytkownika z bazy danych
+            // Aktywny stream = ExpiresAt w przyszłości I LastHeartbeat świeży (< 2 min temu)
             var activeLicenses = await _dbContext.IssuedLicenses
                 .Where(l =>
                     l.UserId == userId &&
                     l.ExpiresAt > DateTime.UtcNow &&
-                    // Pomija tę samą licencję która teraz odnawiana
-                    !(l.ContentId == contentId && l.Quality == quality))
+                    l.LastHeartbeat > heartbeatCutoff && // NOWE: tylko świeże heartbeaty
+                    // Pomija licencje dla tego samego contentu (wszystkie jakości)
+                    // bo właśnie odnawiane lub pobierane po raz pierwszy
+                    l.ContentId != contentId)
                 .ToListAsync(ct);
 
-            var activeStreams = activeLicenses.Count;
+            // Liczy unikalne content ID - każdy content to jeden stream niezależnie od liczby jakości
+            var uniqueContentIds = activeLicenses
+                .Select(l => l.ContentId)
+                .Distinct()
+                .ToList();
+
+            var activeStreams = uniqueContentIds.Count;
+
+            // Dla logowania - pokazuje wszystkie jakości i czas ostatniego heartbeatu
             var activeStreamsList = activeLicenses
-                .Select(l => $"{l.ContentId}:{l.Quality}")
+                .GroupBy(l => l.ContentId)
+                .Select(g =>
+                {
+                    var lastHeartbeat = g.Max(l => l.LastHeartbeat);
+                    var secondsAgo = (int)(DateTime.UtcNow - lastHeartbeat).TotalSeconds;
+                    return $"{g.Key} ({string.Join(", ", g.Select(l => l.Quality))}, heartbeat {secondsAgo}s ago)";
+                })
                 .ToList();
 
             // Sprawdza czy przekroczono limit
@@ -483,20 +546,20 @@ public class LicenseService
             {
                 _logger.LogWarning(
                     "Concurrent stream limit exceeded for user {UserId} (plan: {Plan}). Active: {Active}/{Limit}. Streams: {Streams}",
-                    userId, userPlan, activeStreams, limit, string.Join(", ", activeStreamsList));
+                    userId, userPlan, activeStreams, limit, string.Join("; ", activeStreamsList));
 
                 await transaction.RollbackAsync(ct);
 
                 throw new ForbiddenException(
                     $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
-                    $"Aktualnie aktywne streamy ({activeStreams}): {string.Join(", ", activeStreamsList)}. " +
-                    "Zamknij jeden z aktywnych streamów lub poczekaj na wygaśnięcie licencji.",
+                    $"Aktualnie aktywne streamy ({activeStreams}): {string.Join("; ", activeStreamsList)}. " +
+                    "Zamknij jeden z aktywnych streamów.",
                     new Dictionary<string, object>
                     {
                         ["userPlan"] = userPlan,
                         ["limit"] = limit,
                         ["activeStreams"] = activeStreams,
-                        ["activeStreamsList"] = activeStreamsList
+                        ["activeContentIds"] = uniqueContentIds
                     }
                 );
             }
@@ -608,11 +671,14 @@ public class LicenseService
                 l.ContentId == contentId &&
                 l.Quality == quality, ct);
 
+        var now = DateTime.UtcNow;
+
         if (existingLicense != null)
         {
             // Aktualizuje istniejącą licencję
-            existingLicense.IssuedAt = DateTime.UtcNow;
+            existingLicense.IssuedAt = now;
             existingLicense.ExpiresAt = expiresAt;
+            existingLicense.LastHeartbeat = now; // Resetuje heartbeat przy odnowieniu
         }
         else
         {
@@ -622,8 +688,9 @@ public class LicenseService
                 UserId = userId,
                 ContentId = contentId,
                 Quality = quality,
-                IssuedAt = DateTime.UtcNow,
-                ExpiresAt = expiresAt
+                IssuedAt = now,
+                ExpiresAt = expiresAt,
+                LastHeartbeat = now // Ustawia początkowy heartbeat
             };
 
             _dbContext.IssuedLicenses.Add(licenseEntity);
