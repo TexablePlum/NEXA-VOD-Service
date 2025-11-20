@@ -54,14 +54,14 @@ namespace Nexa.ContentServer.Middleware
                 message = nexaEx.Message;
                 errorContext = nexaEx.Context;
 
-                // Loguje WARNING-I
+                // Loguje warningi
                 _logger.LogWarning(exception,
                     "Business exception: {ErrorCode} - {Message}",
                     errorCode, message);
             }
             else
             {
-                // Nieoczekiwane wyjątki - loguje BŁĄD
+                // Nieoczekiwane wyjątki - loguje błąd
                 _logger.LogError(exception,
                     "Unhandled exception in Content Server");
             }

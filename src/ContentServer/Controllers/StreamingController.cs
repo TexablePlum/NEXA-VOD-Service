@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Nexa.ContentServer.Services;
 using Nexa.Shared.Models;
 
@@ -6,11 +7,12 @@ namespace Nexa.ContentServer.Controllers
 {
     /// <summary>
     /// Controller do serwowania plików wideo: manifesty, segmenty, thumbnails.
-    /// Faza 1 (MVP): Publiczne endpointy - serwuje pliki z dysku.
-    /// Faza 2: Dodać walidację JWT.
+    /// Wymaga autentykacji JWT dla wszystkich endpointów streamingu.
+    /// Klient musi posiadać ważny JWT token otrzymany z DrmLicenseServer.
     /// </summary>
     [ApiController]
     [Route("content")]
+    [Authorize]
     public class StreamingController : ControllerBase
     {
         private readonly StreamingService _streamingService;
@@ -50,7 +52,7 @@ namespace Nexa.ContentServer.Controllers
         /// GET /content/{id}/{quality}/segment_{n}.m4s
         /// Zwraca zaszyfrowany segment wideo lub audio.
         /// Output Cache: Tylko dla init segments (małe, ~1-2KB) - 24h cache.
-        /// Duże segmenty wideo NIE są cacheowane.
+        /// Inne segmenty wideo nie są cacheowane.
         /// </summary>
         [HttpGet("{contentId}/{quality}/{segmentName}")]
         [ProducesResponseType(StatusCodes.Status200OK)]

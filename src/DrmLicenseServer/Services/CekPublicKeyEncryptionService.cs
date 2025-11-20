@@ -4,12 +4,7 @@ using System.Text;
 namespace Nexa.DrmLicenseServer.Services;
 
 /// <summary>
-/// Serwis do szyfrowania CEK (Content Encryption Keys) public keyem RSA urządzenia użytkownika.
-///
-/// 1. User rejestruje urządzenie z public keyem RSA (który jest zabezpieczony w TPM/TEE)
-/// 2. Server przechowuje public key w bazie danych
-/// 3. Przy pobieraniu licencji, CEK jest szyfrowany tym public keyem
-/// 4. User deszyfruje CEK swoim private keyem (który jest w TPM/TEE i niedostępny dla aplikacji)
+/// Serwis do szyfrowania CEK (Content Encryption Keys) public key-em RSA urządzenia użytkownika.
 /// </summary>
 public class CekPublicKeyEncryptionService
 {
@@ -45,8 +40,26 @@ public class CekPublicKeyEncryptionService
             using var rsa = RSA.Create();
             rsa.ImportFromPem(publicKeyPem);
 
-            // Konwertuje hex CEK na bytes
-            var cekBytes = Encoding.UTF8.GetBytes(plaintextCek);
+            // Konwertuje hex CEK (string "a1b2c3d4...") na rzeczywiste bytes
+            byte[] cekBytes;
+            try
+            {
+                cekBytes = Convert.FromHexString(plaintextCek);
+            }
+            catch (FormatException)
+            {
+                throw new ArgumentException(
+                    $"CEK must be a valid hex string. Expected format: 32 hex characters (e.g., 'a1b2c3d4...'). Got length: {plaintextCek.Length}",
+                    nameof(plaintextCek));
+            }
+
+            // Walidacja długości: CEK powinien być 128-bit (16 bytes) lub 256-bit (32 bytes)
+            if (cekBytes.Length != 16 && cekBytes.Length != 32)
+            {
+                throw new ArgumentException(
+                    $"CEK must be 16 bytes (128-bit) or 32 bytes (256-bit). Got: {cekBytes.Length} bytes from hex string '{plaintextCek}'",
+                    nameof(plaintextCek));
+            }
 
             // Szyfruje używając RSA-OAEP z SHA-256
             var encryptedBytes = rsa.Encrypt(cekBytes, RSAEncryptionPadding.OaepSHA256);
@@ -121,17 +134,5 @@ public class CekPublicKeyEncryptionService
             errorMessage = $"Failed to validate public key: {ex.Message}";
             return false;
         }
-    }
-
-    /// <summary>
-    /// Generuje przykładową parę kluczy RSA (do testów).
-    /// W produkcji, klient generuje klucze w TPM/TEE.
-    /// </summary>
-    public (string publicKeyPem, string privateKeyPem) GenerateSampleKeyPair(int keySize = 2048)
-    {
-        using var rsa = RSA.Create(keySize);
-        var publicKeyPem = rsa.ExportRSAPublicKeyPem();
-        var privateKeyPem = rsa.ExportRSAPrivateKeyPem();
-        return (publicKeyPem, privateKeyPem);
     }
 }

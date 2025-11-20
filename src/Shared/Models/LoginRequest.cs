@@ -12,11 +12,13 @@ public class LoginRequest
     /// </summary>
     [Required(ErrorMessage = "Email jest wymagany")]
     [EmailAddress(ErrorMessage = "Nieprawidłowy format email")]
+    [MaxLength(255, ErrorMessage = "Email nie może być dłuższy niż 255 znaków")]
     public string Email { get; set; } = string.Empty;
 
     /// <summary>
     /// Hasło użytkownika.
     /// </summary>
     [Required(ErrorMessage = "Hasło jest wymagane")]
+    [MaxLength(128, ErrorMessage = "Hasło nie może być dłuższe niż 128 znaków")] // SECURITY FIX: Prevent BCrypt DoS
     public string Password { get; set; } = string.Empty;
 }

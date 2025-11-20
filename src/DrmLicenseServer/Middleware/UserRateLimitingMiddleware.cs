@@ -112,7 +112,7 @@ public class UserRateLimitingMiddleware
                 return;
             }
 
-            // Dodaj nagłówek z informacją o rate limit
+            // Dodaje nagłówek z informacją o rate limit
             context.Response.OnStarting(() =>
             {
                 context.Response.Headers["X-RateLimit-Limit"] = limit.ToString();
@@ -133,20 +133,43 @@ public class UserRateLimitingMiddleware
 
     private int ParsePeriodToSeconds(string period)
     {
-        if (period.EndsWith("s") && int.TryParse(period.TrimEnd('s'), out var seconds))
+        // SECURITY FIX: Lepsza walidacja formatu period
+        if (string.IsNullOrWhiteSpace(period))
         {
-            return Math.Max(1, Math.Min(seconds, 86400)); // 1s - 24h
-        }
-        else if (period.EndsWith("m") && int.TryParse(period.TrimEnd('m'), out var minutes))
-        {
-            return Math.Max(1, Math.Min(minutes * 60, 86400)); // 1m - 24h
-        }
-        else if (period.EndsWith("h") && int.TryParse(period.TrimEnd('h'), out var hours))
-        {
-            return Math.Max(1, Math.Min(hours * 3600, 86400)); // 1h - 24h
+            _logger.LogError("Period format is null or empty, using default 60s");
+            return 60;
         }
 
-        _logger.LogWarning("Invalid period format: {Period}, using default 60s", period);
-        return 60; // Domyślnie: 1 minuta
+        // Walidacja formatu: musi kończyć się na s/m/h
+        if (!period.EndsWith("s") && !period.EndsWith("m") && !period.EndsWith("h"))
+        {
+            _logger.LogError("Invalid period format: {Period}. Must end with 's', 'm', or 'h'. Using default 60s", period);
+            return 60;
+        }
+
+        // Parse wartości numerycznej
+        var numericPart = period[..^1]; // Wszystko oprócz ostatniego znaku
+        if (!int.TryParse(numericPart, out var value) || value <= 0)
+        {
+            _logger.LogError("Invalid period format: {Period}. Numeric part must be positive integer. Using default 60s", period);
+            return 60;
+        }
+
+        // Convert do sekund z clampingiem 1s - 24h
+        int seconds = period[^1] switch
+        {
+            's' => value,
+            'm' => value * 60,
+            'h' => value * 3600,
+            _ => 60
+        };
+
+        var clamped = Math.Max(1, Math.Min(seconds, 86400)); // 1s - 24h
+        if (clamped != seconds)
+        {
+            _logger.LogWarning("Period {Period} ({Seconds}s) exceeds limits, clamped to {Clamped}s", period, seconds, clamped);
+        }
+
+        return clamped;
     }
 }

@@ -8,10 +8,8 @@ namespace Nexa.DrmLicenseServer.Services;
 /// Używa AES-256-GCM z master keyem do envelope encryption.
 ///
 /// SECURITY:
-/// - TODO: Master key powinien być przechowywany w Azure Key Vault / AWS Secrets Manager
-/// - Nrazie master key w konfiguracji (env variable)
 /// - CEK są szyfrowane przed zapisem do Redis (at-rest encryption)
-/// - TODO: dodatkowe szyfrowanie kluczem publicznym użytkownika przed wysyłką
+/// - Dodatkowe szyfrowanie kluczem publicznym użytkownika przed wysyłką
 /// </summary>
 public class CekEncryptionService
 {

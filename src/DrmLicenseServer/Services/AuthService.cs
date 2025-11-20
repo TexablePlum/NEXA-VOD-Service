@@ -158,6 +158,10 @@ public class AuthService
     /// </summary>
     public async Task<AuthResponse> RefreshTokenAsync(string refreshToken, CancellationToken ct = default)
     {
+        // Crypto-secure losowe opóźnienie aby zmniejszyć signal/noise ratio dla timing attacks
+        var randomDelay = System.Security.Cryptography.RandomNumberGenerator.GetInt32(10, 50); // 10-50ms
+        await Task.Delay(randomDelay, ct);
+
         // Hash podanego tokenu żeby porównać z hashem w bazie
         var tokenHash = HashRefreshToken(refreshToken);
 
@@ -169,6 +173,11 @@ public class AuthService
         if (tokenEntity == null || tokenEntity.IsRevoked || tokenEntity.ExpiresAt <= DateTime.UtcNow)
         {
             _logger.LogWarning("Invalid, revoked or expired refresh token attempted");
+
+            // Crypto-secure losowe opóźnienie dla invalid token
+            var additionalDelay = System.Security.Cryptography.RandomNumberGenerator.GetInt32(10, 50);
+            await Task.Delay(additionalDelay, ct);
+
             throw new UnauthorizedException(
                 "Nieprawidłowy lub wygasły refresh token.",
                 new Dictionary<string, object> { ["errorCode"] = ErrorCode.INVALID_REFRESH_TOKEN }

@@ -6,6 +6,9 @@ using StackExchange.Redis;
 using Microsoft.AspNetCore.ResponseCompression;
 using System.IO.Compression;
 using Microsoft.AspNetCore.OutputCaching;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -79,9 +82,74 @@ builder.Services.AddOutputCache(options =>
     options.SizeLimit = 100 * 1024 * 1024;
 });
 
+// JWT Authentication
+// Content Server wymaga autentykacji JWT dla dostępu do streamingu
+// Używa tego samego JWT co DrmLicenseServer
+var jwtSecret = builder.Configuration["Jwt:Secret"]
+    ?? throw new InvalidOperationException("JWT Secret not configured. Set Jwt:Secret in appsettings.json or environment variables.");
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "NexaDRMServer";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "NexaClient";
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ClockSkew = TimeSpan.FromMinutes(5)  // Tolerancja na różnice czasu między serwerami
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = context =>
+            {
+                var logger = context.HttpContext.RequestServices
+                    .GetRequiredService<ILogger<Program>>();
+                logger.LogWarning("JWT Authentication failed: {Error}", context.Exception.Message);
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+builder.Services.AddAuthorization();
+
 // Swagger
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "NEXA Content Server API", Version = "v1" });
+
+    // Dodaje JWT do Swagger
+    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+        Name = "Authorization",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 
 // CORS
 builder.Services.AddCors(options =>
@@ -89,7 +157,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("NexaClientPolicy", policy =>
     {
         policy
-            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (MVP - później zmienimy)
+            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (TODO: MVP - później zmiana)
             .AllowAnyMethod()       // Zezwalaj GET, POST, PUT, DELETE, etc.
             .AllowAnyHeader();      // Zezwalaj dowolne headers (Authorization, Content-Type, etc.)
     });
@@ -153,14 +221,56 @@ builder.Services.AddSingleton<StreamingService>(sp =>
 
 var app = builder.Build();
 
-// Response Compression - MUSI BYĆ NA POCZĄTKU PIPELINE
+// Response Compression
 app.UseResponseCompression();
 
-// Output Caching - zaraz po compression
+// Output Caching
 app.UseOutputCache();
 
 // Middleware obsługi błędów
 app.UseMiddleware<ErrorHandlingMiddleware>();
+
+// Security Headers
+app.Use(async (context, next) =>
+{
+    // HSTS - wymusza HTTPS przez 1 rok (tylko jeśli request już jest HTTPS)
+    if (context.Request.IsHttps || app.Environment.IsProduction())
+    {
+        context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+
+    // X-Frame-Options - zapobiega clickjacking
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+
+    // X-Content-Type-Options - zapobiega MIME sniffing
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+
+    // Referrer-Policy - kontroluje jakie referrer info jest wysyłane
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    // Content-Security-Policy - ogranicza źródła zasobów
+    // Relaxed dla Swagger UI (Development), strict dla API
+    var path = context.Request.Path.Value ?? "";
+    if (path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/_content", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/_framework", StringComparison.OrdinalIgnoreCase))
+    {
+        // Permisywny CSP dla Swagger UI (Development only)
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'");
+    }
+    else
+    {
+        // Restrykcyjny CSP dla API
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'self'");
+    }
+
+    // X-Permitted-Cross-Domain-Policies
+    context.Response.Headers.Append("X-Permitted-Cross-Domain-Policies", "none");
+
+    await next();
+});
 
 // Rate Limiting
 app.UseIpRateLimiting();
@@ -178,6 +288,8 @@ if (app.Environment.IsDevelopment())
 // CORS
 app.UseCors("NexaClientPolicy");
 
+// autentykacja JWT
+app.UseAuthentication();
 app.UseAuthorization();
 
 // Health check endpoint

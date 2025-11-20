@@ -53,14 +53,14 @@ namespace Nexa.ContentServer.Services
         }
 
         /// <summary>
-        /// Obsługuje zmiany w file system - invaliduje cache tylko dla istotnych zmian.
-        /// Ignoruje zmiany w plikach .m4s, .key, itp. - tylko metadata.json i foldery contentów.
+        /// Obsługuje zmiany w file system - inwaliduje cache tylko dla istotnych zmian.
+        /// Tylko metadata.json i foldery contentów.
         /// </summary>
         private void OnFileSystemChanged(object sender, FileSystemEventArgs e)
         {
             var fileName = Path.GetFileName(e.FullPath);
 
-            // Invaliduje cache tylko gdy:
+            // Inwaliduje cache tylko gdy:
             // 1. Zmieniono/dodano/usunięto metadata.json
             // 2. Dodano/usunięto folder contentu
             if (fileName == "metadata.json" ||
@@ -153,8 +153,24 @@ namespace Nexa.ContentServer.Services
             if (cachedIds.HasValue)
             {
                 _logger.LogInformation("Cache HIT for content IDs list");
-                var idsList = JsonSerializer.Deserialize<List<string>>(cachedIds.ToString()!, _jsonOptions);
-                return idsList ?? new List<string>();
+                // Bezpieczna deserializacja z obsługą null i wyjątków
+                try
+                {
+                    var cacheValue = cachedIds.ToString();
+                    if (!string.IsNullOrEmpty(cacheValue))
+                    {
+                        var idsList = JsonSerializer.Deserialize<List<string>>(cacheValue, _jsonOptions);
+                        if (idsList != null)
+                        {
+                            return idsList;
+                        }
+                    }
+                    _logger.LogWarning("Cached content IDs deserialized to null, fetching from disk");
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "Failed to deserialize cached content IDs, fetching from disk");
+                }
             }
 
             _logger.LogInformation("Cache MISS for content IDs. Scanning storage directories.");
@@ -216,7 +232,7 @@ namespace Nexa.ContentServer.Services
                 throw new ValidationException("Content ID cannot be empty");
             }
 
-            // Path traversal protection tak samo jak w StreamingService
+            // Path traversal protection
             if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
             {
                 _logger.LogWarning("Path traversal attempt blocked in catalog: {ContentId}", contentId);
@@ -229,10 +245,23 @@ namespace Nexa.ContentServer.Services
             if (cachedData.HasValue)
             {
                 _logger.LogInformation("Cache HIT for key: {CacheKey}", cacheKey);
-                var cachedItem = JsonSerializer.Deserialize<ContentMetadata>(cachedData.ToString()!, _jsonOptions);
-                if (cachedItem != null)
+                // Bezpieczna deserializacja z obsługą null i wyjątków
+                try
                 {
-                    return cachedItem;
+                    var cacheValue = cachedData.ToString();
+                    if (!string.IsNullOrEmpty(cacheValue))
+                    {
+                        var cachedItem = JsonSerializer.Deserialize<ContentMetadata>(cacheValue, _jsonOptions);
+                        if (cachedItem != null)
+                        {
+                            return cachedItem;
+                        }
+                    }
+                    _logger.LogWarning("Cached content metadata for {ContentId} deserialized to null, fetching from disk", contentId);
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "Failed to deserialize cached content metadata for {ContentId}, fetching from disk", contentId);
                 }
             }
 

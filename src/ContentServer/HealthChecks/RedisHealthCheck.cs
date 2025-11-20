@@ -3,6 +3,9 @@ using StackExchange.Redis;
 
 namespace Nexa.ContentServer.HealthChecks
 {
+    /// <summary>
+    /// Health check dla Redis.
+    /// </summary>
     public class RedisHealthCheck : IHealthCheck
     {
         private readonly IConnectionMultiplexer _redis;

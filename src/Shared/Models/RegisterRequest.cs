@@ -12,6 +12,7 @@ public class RegisterRequest
     /// </summary>
     [Required(ErrorMessage = "Email jest wymagany")]
     [EmailAddress(ErrorMessage = "Nieprawidłowy format email")]
+    [MaxLength(255, ErrorMessage = "Email nie może być dłuższy niż 255 znaków")]
     public string Email { get; set; } = string.Empty;
 
     /// <summary>

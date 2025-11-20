@@ -11,29 +11,36 @@
 param(
     [Parameter(Mandatory)]
     [string]$InputFile,
-    
+
     [Parameter()]
     [string]$OutputDir = "./content/storage",
-    
+
     [Parameter()]
     [string]$ContentId,
-    
+
     [Parameter()]
     [ValidateSet('480p', '720p', '1080p', '4k', 'all')]
     [string[]]$Qualities = @('480p', '720p'),
-    
+
     [Parameter()]
     [switch]$SkipEncryption,
 
     [Parameter()]
-    [string]$Description = "Brak opisu.", 
+    [string]$Title,
+
+    [Parameter()]
+    [string]$Description = "Brak opisu.",
 
     [Parameter()]
     [string]$ReleaseDate = $null,
 
     [Parameter()]
     [ValidateSet('free', 'basic', 'pro')]
-    [string]$RequiredPlan = 'free'
+    [string]$RequiredPlan = 'free',
+
+    [Parameter()]
+    [ValidateSet('h264_nvenc', 'libx264', 'h264_amf', 'h264_qsv')]
+    [string]$Codec = 'h264_nvenc'
 )
 
 $ErrorActionPreference = "Stop"
@@ -147,7 +154,8 @@ function Invoke-Transcode {
         [string]$InputFile,
         [string]$OutputFile,
         [hashtable]$Settings,
-        [double]$Fps
+        [double]$Fps,
+        [string]$Codec
     )
     
     Write-Info "Transkodowanie do $($Settings.Height)p..."
@@ -159,24 +167,25 @@ function Invoke-Transcode {
     
     $ffmpegArgs = @(
         '-i', $InputFile,
-        '-c:v', 'h264_nvenc', # libx264 - CPU, h264_nvenc - NVIDIA GPU, h264_amf - AMD GPU, h264_qsv - Intel Quick Sync Video
+        '-c:v', $Codec, # Video codec: h264_nvenc (NVIDIA GPU), libx264 (CPU), h264_amf (AMD GPU), h264_qsv (Intel Quick Sync)
         '-profile:v', $Settings.Profile,
         '-b:v', $Settings.VideoBitrate,
         '-maxrate', $Settings.VideoBitrate,
         '-bufsize', "$(([int]($Settings.VideoBitrate.TrimEnd('M')) * 2))M",
         '-vf', "scale=$($Settings.Width):$($Settings.Height)",
-        '-g', $gopSize.ToString(),           
-        '-keyint_min', $gopSize.ToString(),  
-        '-sc_threshold', '0',                
+        '-g', $gopSize.ToString(),
+        '-keyint_min', $gopSize.ToString(),
+        '-sc_threshold', '0',
         '-c:a', 'aac',
         '-b:a', $Settings.AudioBitrate,
         '-movflags', '+faststart',
         '-y',
         $OutputFile
     )
-    
-    & ffmpeg $ffmpegArgs
-    
+
+    # Redirect output to null to prevent it from entering the pipeline
+    & ffmpeg $ffmpegArgs 2>&1 | Out-Null
+
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Transkodowanie zakonczone: $(Split-Path $OutputFile -Leaf)"
     } else {
@@ -189,52 +198,54 @@ function Invoke-Segmentation {
     param(
         [Parameter(Mandatory)]
         [hashtable]$InputFiles,
-        
+
         [Parameter(Mandatory)]
         [string]$OutputDir,
-        
+
         [Parameter(Mandatory)]
         [string]$ContentId,
-        
+
         [Parameter(Mandatory)]
         [string]$ShakaPath,
-        
+
         [Parameter()]
         [switch]$SkipEncryption
     )
-    
+
     Write-Info "Rozpoczynanie segmentacji dla wszystkich jakosci..."
-    
+
     $inputStreams = @()
     $encryptionKeys = @()
     $encryptionMetadata = @{}
-    
+
     foreach ($quality in $InputFiles.Keys) {
         $qualityDir = Join-Path $OutputDir $quality
         New-Item -ItemType Directory -Path $qualityDir -Force | Out-Null
-        
+
         $filePath = $InputFiles[$quality]
-        
+
         if (-not $SkipEncryption) {
+            # SECURITY FIX: Generate CEK in memory only - NO DISK WRITE!
             $cek = -join ((1..16) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
             $kid = (New-Guid).ToString('N')
-            
-            $keyFile = Join-Path $qualityDir "$quality.key"
-            Set-Content -Path $keyFile -Value $cek -NoNewline
-            
-            Write-Info "[$quality] CEK: $cek"
+
+            # REMOVED: $keyFile = Join-Path $qualityDir "$quality.key"
+            # REMOVED: Set-Content -Path $keyFile -Value $cek -NoNewline
+
+            Write-Info "[$quality] CEK: [REDACTED - in memory only]"
             Write-Info "[$quality] KID: $kid"
-            Write-Host "[$quality] Key file: $keyFile" -ForegroundColor Yellow
-            
+            # REMOVED: Write-Host "[$quality] Key file: $keyFile" -ForegroundColor Yellow
+
             $encryptionKeys += "label=$quality`:key_id=$kid`:key=$cek"
-            
+
+            # Store CEK in memory (returned to caller, never saved to disk)
             $encryptionMetadata[$quality] = @{
                 KeyId = $kid
-                KeyFile = "$quality.key"
+                Cek = $cek  # SECURITY: In-memory only, returned to upload script
                 Algorithm = 'AES-128-CTR'
             }
         }
-        
+
         if (-not $SkipEncryption) {
             $inputStreams += "in=$filePath,stream=audio,init_segment=$qualityDir/init_audio.m4s,segment_template=$qualityDir/audio_`$Number$.m4s,drm_label=$quality"
             $inputStreams += "in=$filePath,stream=video,init_segment=$qualityDir/init_video.m4s,segment_template=$qualityDir/video_`$Number$.m4s,drm_label=$quality"
@@ -243,50 +254,49 @@ function Invoke-Segmentation {
             $inputStreams += "in=$filePath,stream=video,init_segment=$qualityDir/init_video.m4s,segment_template=$qualityDir/video_`$Number$.m4s"
         }
     }
-    
+
     $shakaArgs = $inputStreams
     $shakaArgs += '--segment_duration', '4'
-    
+
 
     $shakaArgs += '--mpd_output', (Join-Path $OutputDir "manifest.mpd")
 
     $shakaArgs += '--generate_static_live_mpd=true'
     $shakaArgs += '--profile', 'on-demand'
-    
+
 
     if (-not $SkipEncryption) {
         $keysArg = $encryptionKeys -join ','
-        
+
         $shakaArgs += @(
             '--enable_raw_key_encryption',
             '--keys', $keysArg,
             '--clear_lead', '0'
         )
-        
-        $fullEncryptionMeta = @{
-            ContentId = $ContentId
-            SegmentDuration = 4
-            Qualities = $encryptionMetadata
-        }
-        
-        $metaFile = Join-Path $OutputDir "encryption.json"
-        $fullEncryptionMeta | ConvertTo-Json -Depth 5 | Set-Content $metaFile
-        
-        Write-Success "Szyfrowanie zakonczone - kazda jakosc ma SWOJ WLASNY CEK!"
-        Write-Info "WAZNE: Zapisz CEK-i w bezpiecznym miejscu (DRM Server database)!"
-        
+
+        # SECURITY FIX: NO encryption.json file created - CEK stays in memory!
+        # REMOVED: $metaFile = Join-Path $OutputDir "encryption.json"
+        # REMOVED: $fullEncryptionMeta | ConvertTo-Json -Depth 5 | Set-Content $metaFile
+
+        Write-Success "Szyfrowanie zakonczone - kazda jakosc ma SWOJ WLASNY CEK (in-memory only)!"
+        Write-Info "SECURITY: CEK-i pozostaja w pamieci i zostana bezpiecznie przeslane do DRM Server"
+
     } else {
         Write-Info "Szyfrowanie pominiete (--SkipEncryption)"
     }
-    
-    & $ShakaPath $shakaArgs
-    
+
+    # Redirect output to null to prevent it from entering the pipeline
+    & $ShakaPath $shakaArgs 2>&1 | Out-Null
+
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Segmentacja zakonczona: manifest.mpd"
     } else {
         Write-Failure "Blad segmentacji"
         exit 1
     }
+
+    # SECURITY: Return encryption metadata with CEK in memory (not on disk!)
+    return $encryptionMetadata
 }
 
 function New-Thumbnail {
@@ -324,29 +334,37 @@ function New-Metadata {
     param(
         [string]$OutputDir,
         [hashtable]$VideoInfo,
-        [string[]]$AvailableQualities
+        [string[]]$AvailableQualities,
+        [string]$Title
     )
-    
+
     Write-Info "Tworzenie metadanych..."
-    
+
+    # Use provided title or fallback to filename
+    $finalTitle = if ([string]::IsNullOrEmpty($Title)) {
+        [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
+    } else {
+        $Title
+    }
+
     $metadata = @{
         ContentId = $ContentId
-        Title = [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
+        Title = $finalTitle
         DurationSeconds = $VideoInfo.Duration
         AvailableQualities = $AvailableQualities
         SourceResolution = "$($VideoInfo.Width)x$($VideoInfo.Height)"
         CreatedAt = (Get-Date -Format "o")
         ManifestUrl = "/content/$ContentId/manifest.mpd"
         ThumbnailUrl = "/content/$ContentId/thumbnail.jpg"
-        
+
         Description = $Description
         ReleaseDate = $ReleaseDate
         RequiredPlan = $RequiredPlan
     }
-    
+
     $metaFile = Join-Path $OutputDir "metadata.json"
     $metadata | ConvertTo-Json -Depth 5 | Set-Content $metaFile
-    
+
     Write-Success "Metadata zapisane: $metaFile"
 }
 
@@ -393,13 +411,14 @@ NEXA - Content Preparation Pipeline
     Write-Info "Rozpoczynanie transkodowania wszystkich jakosci..."
     foreach ($quality in $Qualities) {
         Write-Info "Transkodowanie: $quality"
-        
+
         $settings = Get-QualitySettings -Quality $quality
         $tempFile = Join-Path $contentDir "temp_$quality.mp4"
-        
-        Invoke-Transcode -InputFile $InputFile -OutputFile $tempFile -Settings $settings -Fps $videoInfo.Fps
-        
-        $tempFilePaths[$quality] = $tempFile 
+
+        # Use [void] to ensure function call doesn't add to pipeline
+        [void](Invoke-Transcode -InputFile $InputFile -OutputFile $tempFile -Settings $settings -Fps $videoInfo.Fps -Codec $Codec)
+
+        $tempFilePaths[$quality] = $tempFile
         $processedQualities += $quality
     }
     Write-Success "Transkodowanie ukonczone."
@@ -415,7 +434,8 @@ NEXA - Content Preparation Pipeline
         $segmentParams.Add('SkipEncryption', $true)
     }
 
-    Invoke-Segmentation @segmentParams
+    # SECURITY: Capture encryption metadata (CEK in memory) - returned from Invoke-Segmentation
+    $encryptionData = Invoke-Segmentation @segmentParams
 
     Write-Info "Sprzatanie plikow tymczasowych..."
     foreach ($tempFile in $tempFilePaths.Values) {
@@ -423,26 +443,34 @@ NEXA - Content Preparation Pipeline
     }
 
     $thumbnailFile = Join-Path $contentDir "thumbnail.jpg"
-    New-Thumbnail -InputFile $InputFile -OutputFile $thumbnailFile -Duration $videoInfo.Duration
-    
-    New-Metadata -OutputDir $contentDir -VideoInfo $videoInfo -AvailableQualities $processedQualities
-    
+    [void](New-Thumbnail -InputFile $InputFile -OutputFile $thumbnailFile -Duration $videoInfo.Duration)
+
+    [void](New-Metadata -OutputDir $contentDir -VideoInfo $videoInfo -AvailableQualities $processedQualities -Title $Title)
+
     Write-Host "`n========================================" -ForegroundColor Green
     Write-Host "Content przygotowany pomyslnie" -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Green
     Write-Host "Content ID: $ContentId" -ForegroundColor Yellow
     Write-Host "Lokalizacja: $contentDir" -ForegroundColor Yellow
     Write-Host "Jakosci: $($processedQualities -join ', ')" -ForegroundColor Yellow
-    
-    
+
+    # SECURITY: Return encryption data to caller (upload-content.ps1)
+    # CEK remains in memory, never written to disk
     if (-not $SkipEncryption) {
-        Write-Host "`nWAZNE: Zaszyfruj i zapisz CEK-i w bazie danych DRM Server" -ForegroundColor Red
-        Write-Host "Kazda jakosc ma SWOJ WLASNY klucz:" -ForegroundColor Yellow
-        foreach ($quality in $processedQualities) {
-            Write-Host "  - $quality`: $contentDir/$quality/$quality.key" -ForegroundColor Yellow
-        }
-        Write-Host "`nMetadane szyfrowania: $contentDir/encryption.json" -ForegroundColor Yellow
+        Write-Host "`nSECURITY: CEK-i zostana automatycznie przekazane do DRM Server (in-memory)" -ForegroundColor Green
     }
+
+    # Return structured result to upload-content.ps1
+    $returnValue = @{
+        ContentId = $ContentId
+    }
+
+    if (-not $SkipEncryption -and $null -ne $encryptionData) {
+        $returnValue.EncryptionData = $encryptionData
+    }
+
+    return $returnValue
 }
 
+# Run main and return result (for use by upload-content.ps1)
 Main

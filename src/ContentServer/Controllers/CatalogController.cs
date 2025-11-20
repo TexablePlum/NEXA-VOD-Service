@@ -6,8 +6,6 @@ namespace Nexa.ContentServer.Controllers
 {
     /// <summary>
     /// API endpoint do przeglądania katalogu filmów.
-    /// Faza 1 (MVP): Publiczne endpointy bez autoryzacji.
-    /// Faza 2: Dodać autoryzację i JWT walidację.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -25,8 +23,8 @@ namespace Nexa.ContentServer.Controllers
         /// <summary>
         /// GET /api/catalog
         /// Zwraca listę dostępnych filmów z paginacją i opcjonalnym wyszukiwaniem.
-        /// Optymalizacja: ładuje tylko potrzebne filmy (limit), nie wszystkie.
-        /// Output Cache: cache przez 5 minut, inwalidacja przy zmianach w storage.
+        /// Ładuje tylko potrzebne filmy (limit), nie wszystkie.
+        /// Cache przez 5 minut, inwalidacja przy zmianach w storage.
         /// </summary>
         /// <param name="limit">Maksymalna liczba wyników (default: 50, max: 100)</param>
         /// <param name="offset">Offset dla paginacji (default: 0)</param>
@@ -42,6 +40,8 @@ namespace Nexa.ContentServer.Controllers
             [FromQuery] string? search = null,
             CancellationToken cancellationToken = default)
         {
+            _logger.LogInformation("GET /api/catalog - limit={Limit}, offset={Offset}, search={Search}", limit, offset, search);
+
             // Walidacja parametrów
             if (limit < 1) limit = 50;
             if (limit > 100) limit = 100;
@@ -67,7 +67,7 @@ namespace Nexa.ContentServer.Controllers
         /// <summary>
         /// GET /api/catalog/{id}
         /// Zwraca szczegóły konkretnego filmu.
-        /// Output Cache: cache przez 5 minut, inwalidacja przy zmianach w storage.
+        /// Cache przez 5 minut, inwalidacja przy zmianach w storage.
         /// </summary>
         [HttpGet("{id}")]
         [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "ContentCache")]
@@ -77,6 +77,7 @@ namespace Nexa.ContentServer.Controllers
         [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<ContentMetadata>> GetContentById(string id, CancellationToken cancellationToken = default)
         {
+            _logger.LogInformation("GET /api/catalog/{Id}", id);
             var content = await _catalogService.GetContentByIdAsync(id, cancellationToken);
             return Ok(content);
         }

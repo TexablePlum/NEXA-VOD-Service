@@ -31,12 +31,12 @@ public class IssuedLicenseEntity
     [Column("expires_at")]
     public DateTime ExpiresAt { get; set; }
 
-    /// <summary>
-    /// Ostatni heartbeat od klienta. Używany do sprawdzania czy stream jest faktycznie aktywny.
-    /// Stream jest aktywny jeśli LastHeartbeat < 2 minuty temu.
-    /// </summary>
     [Column("last_heartbeat")]
     public DateTime LastHeartbeat { get; set; } = DateTime.UtcNow;
+
+    [Column("key_id")]
+    [MaxLength(64)]
+    public string? KeyId { get; set; }
 
     [ForeignKey(nameof(UserId))]
     public UserEntity User { get; set; } = null!;

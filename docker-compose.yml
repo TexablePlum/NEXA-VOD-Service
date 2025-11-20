@@ -1,6 +1,21 @@
-version: '3.8'
-
 services:
+  # Nginx Reverse Proxy - Single entry point
+  nginx:
+    image: nginx:alpine
+    container_name: nexa-gateway
+    ports:
+      - "80:80"
+      # - "443:443"  # Uncomment for HTTPS
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      # - ./ssl:/etc/nginx/ssl:ro  # Uncomment for HTTPS with certs
+    depends_on:
+      - drm-server
+      - content-server
+    networks:
+      - nexa-network
+    restart: unless-stopped
+
   postgres:
     image: postgres:15-alpine
     container_name: nexa-postgres
@@ -45,15 +60,17 @@ services:
     container_name: nexa-drm-server
     env_file:
       - .env
-    ports:
-      - "5001:8080"
+    # SECURITY: No external port - only accessible via nginx
+    expose:
+      - "8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__DefaultConnection=Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      - JWT__Secret=${JWT_SECRET}
-      - JWT__Issuer=${JWT_ISSUER}
-      - JWT__Audience=${JWT_AUDIENCE}
-      - MasterEncryptionKey=${MASTER_ENCRYPTION_KEY}
+      - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD:-}
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=${JWT_ISSUER}
+      - Jwt__Audience=${JWT_AUDIENCE}
+      - Security__CekMasterKey=${MASTER_ENCRYPTION_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +80,7 @@ services:
       - nexa-network
     volumes:
       - ./data:/app/data
+    restart: unless-stopped
 
   content-server:
     build:
@@ -71,12 +89,17 @@ services:
     container_name: nexa-content-server
     env_file:
       - .env
-    ports:
-      - "5002:8080"
+    # SECURITY: No external port - only accessible via nginx
+    expose:
+      - "8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD:-}
       - ContentStorage__BasePath=/app/content
+      # JWT Configuration - SAME as DrmLicenseServer for validation!
+      - Jwt__Secret=${JWT_SECRET}
+      - Jwt__Issuer=${JWT_ISSUER}
+      - Jwt__Audience=${JWT_AUDIENCE}
     depends_on:
       redis:
         condition: service_healthy
@@ -84,6 +107,7 @@ services:
       - nexa-network
     volumes:
       - ./content/storage:/app/content
+    restart: unless-stopped
 
 networks:
   nexa-network:

@@ -7,6 +7,7 @@ using Nexa.DrmLicenseServer.Validation;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Nexa.DrmLicenseServer.Services;
 
@@ -30,6 +31,10 @@ public class LicenseService
     private const string CekKeyPrefix = "cek:";
     private const string ContentMetaPrefix = "content:meta:";
     private const string AvailableQualitiesSetPrefix = "content:qualities:"; // Redis SET dla dostępnych jakości
+
+    // Whitelist dozwolonych znaków w ContentId
+    // Tylko alfanumeryczne, myślnik i podkreślenie, długość 1-128 znaków
+    private static readonly Regex ContentIdPattern = new(@"^[a-zA-Z0-9_-]{1,128}$", RegexOptions.Compiled);
 
     public LicenseService(
         IDatabase redisDb,
@@ -73,11 +78,12 @@ public class LicenseService
             throw new ValidationException("Device ID nie może być pusty.");
         }
 
-        // Path traversal protection
-        if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
+        // Whitelist dozwolonych znaków
+        if (!ContentIdPattern.IsMatch(contentId))
         {
-            _logger.LogWarning("Path traversal attempt blocked in multi-license request: {ContentId}", contentId);
-            throw new ValidationException("Nieprawidłowy format Content ID.");
+            _logger.LogWarning("Invalid ContentId format rejected: {ContentId}", contentId);
+            throw new ValidationException(
+                "Nieprawidłowy format Content ID. Dozwolone tylko znaki alfanumeryczne, myślnik i podkreślenie (1-128 znaków).");
         }
 
         // Pobiera metadane contentu
@@ -87,12 +93,19 @@ public class LicenseService
         {
             _logger.LogWarning("Content metadata not found for contentId: {ContentId}", contentId);
 
-            // Audit log
-            _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, "all",
-                "Content not found",
-                ErrorCode.CONTENT_NOT_FOUND,
-                ct);
+            try
+            {
+                await _auditService.LogLicenseRejectedAsync(
+                    user.UserId, contentId, "all",
+                    "Content not found",
+                    ErrorCode.CONTENT_NOT_FOUND,
+                    ct);
+            }
+            catch (Exception auditEx)
+            {
+                // Audit failure nie powinien blokować głównej operacji, ale loguje error
+                _logger.LogError(auditEx, "Failed to write audit log for license rejection (content not found)");
+            }
 
             throw new NotFoundException(
                 $"Content o ID '{contentId}' nie został znaleziony.",
@@ -107,12 +120,18 @@ public class LicenseService
                 "Insufficient plan for user {UserId} (plan: {UserPlan}) to access content {ContentId} (required: {RequiredPlan})",
                 user.UserId, user.Plan, contentId, contentMeta.RequiredPlan);
 
-            // Audit log
-            _ = _auditService.LogLicenseRejectedAsync(
-                user.UserId, contentId, "all",
-                $"Insufficient plan: {user.Plan} < {contentMeta.RequiredPlan}",
-                ErrorCode.FORBIDDEN,
-                ct);
+            try
+            {
+                await _auditService.LogLicenseRejectedAsync(
+                    user.UserId, contentId, "all",
+                    $"Insufficient plan: {user.Plan} < {contentMeta.RequiredPlan}",
+                    ErrorCode.FORBIDDEN,
+                    ct);
+            }
+            catch (Exception auditEx)
+            {
+                _logger.LogError(auditEx, "Failed to write audit log for license rejection (insufficient plan)");
+            }
 
             throw new ForbiddenException(
                 $"Twój plan ({user.Plan}) nie pozwala na odtworzenie tego contentu. Wymagany plan: {contentMeta.RequiredPlan}",
@@ -125,8 +144,34 @@ public class LicenseService
             );
         }
 
-        // Pobiera rzeczywiście dostępne jakości dla tego contentu i planu użytkownika
-        var availableQualities = await GetAvailableQualitiesAsync(contentId, user.Plan, ct);
+        // Pobiera public key urządzenia (walidacja że urządzenie jest zarejestrowane)
+        string publicKeyPem;
+        bool hasTpm;
+        try
+        {
+            publicKeyPem = await _deviceKeyService.GetDevicePublicKeyAsync(user.UserId, deviceId, ct);
+            hasTpm = await _deviceKeyService.HasTpmAttestationAsync(user.UserId, deviceId, ct);
+        }
+        catch (NotFoundException)
+        {
+            _logger.LogWarning("Device not found for user {UserId}: {DeviceId}", user.UserId, deviceId);
+            throw new NotFoundException(
+                $"Urządzenie '{deviceId}' nie jest zarejestrowane. Zarejestruj urządzenie na POST /api/device/register",
+                deviceId
+            );
+        }
+
+        // Urządzenia bez TPM są ograniczone do maksymalnie 720p
+        // Zapobiega to piractwu poprzez wymóg zaufanego sprzętu dla wysokich jakości
+        if (!hasTpm)
+        {
+            _logger.LogInformation(
+                "Device {DeviceId} for user {UserId} has no TPM attestation - limiting max quality to 720p",
+                deviceId, user.UserId);
+        }
+
+        // Pobiera rzeczywiście dostępne jakości dla tego contentu, planu użytkownika i TPM
+        var availableQualities = await GetAvailableQualitiesAsync(contentId, user.Plan, hasTpm, ct);
 
         if (availableQualities.Count == 0)
         {
@@ -146,26 +191,13 @@ public class LicenseService
             );
         }
 
-        // Pobiera public key urządzenia (walidacja że urządzenie jest zarejestrowane)
-        string publicKeyPem;
-        try
-        {
-            publicKeyPem = await _deviceKeyService.GetDevicePublicKeyAsync(user.UserId, deviceId, ct);
-        }
-        catch (NotFoundException)
-        {
-            _logger.LogWarning("Device not found for user {UserId}: {DeviceId}", user.UserId, deviceId);
-            throw new NotFoundException(
-                $"Urządzenie '{deviceId}' nie jest zarejestrowane. Zarejestruj urządzenie na POST /api/device/register",
-                deviceId
-            );
-        }
-
         // Oblicza czas wygaśnięcia licencji (wspólny dla wszystkich jakości)
         var expirationHours = _configuration.GetValue<int>("License:ExpirationHours", 8);
         var expiresAt = DateTime.UtcNow.AddHours(expirationHours);
 
         // Pobiera i deszyfruje wszystkie CEK-i (przed rozpoczęciem transakcji DB)
+        // CEK są pobierane z Redisa poza transakcją DB.
+        // Zapisujemy KeyId w licencji aby wykryć potencjalne inconsistencies po rotacji kluczy.
         var decryptedCeks = new List<(string quality, string decryptedKey, string keyId)>();
 
         foreach (var quality in availableQualities)
@@ -229,9 +261,9 @@ public class LicenseService
             await CheckConcurrentStreamLimitAsync(user.UserId, contentId, string.Empty, user.Plan, ct);
 
             // Zapisuje informację o wydanych licencjach w transkacji
-            foreach (var (quality, _, _) in decryptedCeks)
+            foreach (var (quality, _, keyId) in decryptedCeks)
             {
-                await SaveIssuedLicenseAsync(user.UserId, contentId, quality, expiresAt, ct);
+                await SaveIssuedLicenseAsync(user.UserId, contentId, quality, expiresAt, keyId, ct);
             }
 
             await transaction.CommitAsync(ct);
@@ -541,15 +573,15 @@ public class LicenseService
                 userId, userPlan, activeStreams, limit, string.Join("; ", activeStreamsList));
 
             throw new ForbiddenException(
-                $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}): {limit}. " +
-                $"Aktualnie aktywne streamy ({activeStreams}): {string.Join("; ", activeStreamsList)}. " +
-                "Zamknij jeden z aktywnych streamów.",
+                $"Osiągnięto limit jednoczesnych streamów dla Twojego planu ({userPlan}). " +
+                $"Maksymalna liczba równoczesnych streamów: {limit}. " +
+                $"Aktualnie aktywne streamy: {activeStreams}. " +
+                "Zamknij jeden z aktywnych streamów i spróbuj ponownie.",
                 new Dictionary<string, object>
                 {
                     ["userPlan"] = userPlan,
                     ["limit"] = limit,
-                    ["activeStreams"] = activeStreams,
-                    ["activeContentIds"] = uniqueContentIds
+                    ["activeStreams"] = activeStreams
                 }
             );
         }
@@ -572,17 +604,20 @@ public class LicenseService
     }
 
     /// <summary>
-    /// Pobiera listę RZECZYWIŚCIE dostępnych jakości dla contentu,
-    /// przefiltrowaną przez plan użytkownika. Wyniki są cache'owane w Redis (TTL: 3600s).
+    /// Pobiera listę rzeczywiście dostępnych jakości dla contentu,
+    /// przefiltrowaną przez plan użytkownika i TPM urządzenia.
+    /// Urządzenia bez TPM są ograniczone do maksymalnie 720p niezależnie od planu.
+    /// Wyniki są cache'owane w Redis (TTL: 3600s).
     /// Używa Redis SET (SMEMBERS) O(1) zamiast O(N).
     /// </summary>
     private async Task<List<string>> GetAvailableQualitiesAsync(
         string contentId,
         string userPlan,
+        bool hasTpm,
         CancellationToken ct)
     {
-        // Sprawdza najpierw cache
-        var cacheKey = $"content:qualities:{contentId}:{userPlan}";
+        // Cache key zawiera informację o TPM
+        var cacheKey = $"content:qualities:{contentId}:{userPlan}:{(hasTpm ? "tpm" : "notpm")}";
         var cachedJson = await _redisDb.StringGetAsync(cacheKey);
 
         if (cachedJson.HasValue)
@@ -590,15 +625,23 @@ public class LicenseService
             var cached = JsonSerializer.Deserialize<List<string>>(cachedJson.ToString(), _jsonOptions);
             if (cached != null)
             {
-                _logger.LogDebug("Cache hit for qualities: {ContentId}, plan: {Plan}", contentId, userPlan);
+                _logger.LogDebug("Cache hit for qualities: {ContentId}, plan: {Plan}, TPM: {HasTpm}",
+                    contentId, userPlan, hasTpm);
                 return cached;
             }
         }
 
-        _logger.LogDebug("Cache miss for qualities: {ContentId}, plan: {Plan} - fetching from Redis SET", contentId, userPlan);
+        _logger.LogDebug("Cache miss for qualities: {ContentId}, plan: {Plan}, TPM: {HasTpm} - fetching from Redis SET",
+            contentId, userPlan, hasTpm);
 
         // Pobiera maksymalną jakość dla planu użytkownika
         var maxQuality = Plans.GetMaxQuality(userPlan);
+
+        if (!hasTpm && Qualities.GetLevel(maxQuality) > Qualities.GetLevel("720p"))
+        {
+            maxQuality = "720p";
+            _logger.LogDebug("Max quality limited to 720p due to missing TPM attestation");
+        }
 
         // Format SET key: content:qualities:{contentId}
         var qualitiesSetKey = $"{AvailableQualitiesSetPrefix}{contentId}";
@@ -639,6 +682,7 @@ public class LicenseService
         string contentId,
         string quality,
         DateTime expiresAt,
+        string? keyId,
         CancellationToken ct)
     {
         // Sprawdza czy już istnieje aktywna licencja dla tej kombinacji
@@ -656,6 +700,7 @@ public class LicenseService
             existingLicense.IssuedAt = now;
             existingLicense.ExpiresAt = expiresAt;
             existingLicense.LastHeartbeat = now; // Resetuje heartbeat przy odnowieniu
+            existingLicense.KeyId = keyId; // Aktualizuje KeyId przy odnowieniu
         }
         else
         {
@@ -667,7 +712,8 @@ public class LicenseService
                 Quality = quality,
                 IssuedAt = now,
                 ExpiresAt = expiresAt,
-                LastHeartbeat = now // Ustawia początkowy heartbeat
+                LastHeartbeat = now, // Ustawia początkowy heartbeat
+                KeyId = keyId // Zapisuje KeyId dla audit trail
             };
 
             _dbContext.IssuedLicenses.Add(licenseEntity);

@@ -15,6 +15,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Kontrolery
 builder.Services.AddControllers();
 
+// HttpClient dla komunikacji z Content Server
+builder.Services.AddHttpClient();
+
 // Database (PostgreSQL + Entity Framework Core)
 builder.Services.AddDbContext<NexaDbContext>(options =>
 {
@@ -27,7 +30,7 @@ builder.Services.AddDbContext<NexaDbContext>(options =>
     });
 });
 
-// Rate Limiting
+// Rate Limiting (AspNetCoreRateLimit)
 builder.Services.AddMemoryCache();
 builder.Services.Configure<IpRateLimitOptions>(builder.Configuration.GetSection("IpRateLimiting"));
 builder.Services.AddSingleton<IIpPolicyStore, MemoryCacheIpPolicyStore>();
@@ -83,7 +86,7 @@ builder.Services.AddCors(options =>
 // JWT Authentication
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("JWT Secret not configured");
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "NexaDRMServer";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "NexaDrmServer";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "NexaClient";
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -98,7 +101,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtAudience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-            ClockSkew = TimeSpan.Zero // Brak tolerancji na czas (strict expiration)
+            ClockSkew = TimeSpan.FromMinutes(5),
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role
         };
 
         options.Events = new JwtBearerEvents
@@ -195,7 +199,56 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 // Forwarded Headers - aplikacja rozumie że jest za proxy
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    // Ufa proxy z sieci Dockera
+    KnownNetworks = { },  // Puste = ufaj wszystkim 
+    KnownProxies = { }
+});
+
+// IP Whitelist Middleware - ogranicza dostęp do admin endpoints
+// Tylko localhost + Docker network (172.16.0.0/12, 172.18.0.0/16)
+app.UseMiddleware<IpWhitelistMiddleware>();
+
+// Security Headers
+app.Use(async (context, next) =>
+{
+    // HSTS - wymusza HTTPS przez 1 rok (tylko jeśli request już jest HTTPS)
+    if (context.Request.IsHttps || app.Environment.IsProduction())
+    {
+        context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+
+    // X-Frame-Options - zapobiega clickjacking
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+
+    // X-Content-Type-Options - zapobiega MIME sniffing
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+
+    // Referrer-Policy - kontroluje jakie referrer info jest wysyłane
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+
+    // Content-Security-Policy - ogranicza źródła zasobów
+    // Relaxed dla Swagger UI (Development), strict dla API
+    var path = context.Request.Path.Value ?? "";
+    if (path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/_content", StringComparison.OrdinalIgnoreCase) ||
+        path.StartsWith("/_framework", StringComparison.OrdinalIgnoreCase))
+    {
+        // Permisywny CSP dla Swagger UI (Development only)
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'");
+    }
+    else
+    {
+        // Restrykcyjny CSP dla API
+        context.Response.Headers.Append("Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'self'");
+    }
+
+    // X-Permitted-Cross-Domain-Policies - blokuje cross-domain policy dla Flash/PDF
+    context.Response.Headers.Append("X-Permitted-Cross-Domain-Policies", "none");
+
+    await next();
 });
 
 // HTTPS enforcement - warunkowo włączony (wyłączony w production za proxy)
@@ -205,12 +258,6 @@ app.UseForwardedHeaders(new ForwardedHeadersOptions
 if (!app.Environment.IsProduction() || builder.Configuration.GetValue<bool>("Security:EnforceHttpsRedirection", false))
 {
     app.UseHttpsRedirection();
-
-    // HSTS (HTTP Strict Transport Security) - tylko w Development
-    if (app.Environment.IsDevelopment())
-    {
-        app.UseHsts();
-    }
 }
 
 // Rate Limiting

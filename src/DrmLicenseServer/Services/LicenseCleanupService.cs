@@ -69,7 +69,7 @@ public class LicenseCleanupService : BackgroundService
 
         try
         {
-            // 1. Usuwa wygasłe licencje starsze niż retention period
+            // Usuwa wygasłe licencje starsze niż retention period
             var deletedLicensesCount = await dbContext.IssuedLicenses
                 .Where(l => l.ExpiresAt < cutoffDate)
                 .ExecuteDeleteAsync(ct);
@@ -83,7 +83,7 @@ public class LicenseCleanupService : BackgroundService
                 _logger.LogDebug("No expired licenses to clean up");
             }
 
-            // 2. Usuwa wygasłe/revoked refresh tokeny
+            // Usuwa wygasłe/revoked refresh tokeny
             var refreshTokensCutoff = DateTime.UtcNow;
             var deletedTokensCount = await dbContext.RefreshTokens
                 .Where(rt => rt.ExpiresAt < refreshTokensCutoff || rt.IsRevoked)

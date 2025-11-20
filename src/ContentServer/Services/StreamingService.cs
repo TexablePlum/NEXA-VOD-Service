@@ -70,12 +70,8 @@ namespace Nexa.ContentServer.Services
                 throw new ValidationException("Segment name cannot be empty");
             }
 
-            //
-            // KRYTYCZNE !!!
-            //
             // 1. Sprawdza, czy nazwa segmentu nie zawiera ".." (próba wyjścia z folderu)
-            // 2. Sprawdza, czy kończy się na .m4s (blokuje dostęp do .json, .key, .mpd itp.)
-            //
+            // 2. Sprawdza, czy kończy się na .m4s 
             if (segmentName.Contains("..") || !segmentName.EndsWith(".m4s"))
             {
                 _logger.LogWarning("Potential path traversal attack blocked: {SegmentName}", segmentName);
