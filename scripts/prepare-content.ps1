@@ -19,7 +19,7 @@ param(
     [string]$ContentId,
 
     [Parameter()]
-    [ValidateSet('480p', '720p', '1080p', '4k', 'all')]
+    [ValidateSet('144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', '4320p', '4k', '8k', 'all')]
     [string[]]$Qualities = @('480p', '720p'),
 
     [Parameter()]
@@ -104,7 +104,7 @@ function Get-VideoInfo {
         Height = $videoStream.height
         Bitrate = [math]::Round($info.format.bit_rate / 1000000, 2)
         Codec = $videoStream.codec_name
-        Fps = $fps  # DODANE
+        Fps = $fps
     }
 }
 
@@ -114,8 +114,29 @@ function New-ContentId {
 
 function Get-QualitySettings {
     param([string]$Quality)
-    
+
     $settings = @{
+        '144p' = @{
+            Width = 256
+            Height = 144
+            VideoBitrate = '200k'
+            AudioBitrate = '64k'
+            Profile = 'baseline'
+        }
+        '240p' = @{
+            Width = 426
+            Height = 240
+            VideoBitrate = '400k'
+            AudioBitrate = '96k'
+            Profile = 'baseline'
+        }
+        '360p' = @{
+            Width = 640
+            Height = 360
+            VideoBitrate = '750k'
+            AudioBitrate = '128k'
+            Profile = 'baseline'
+        }
         '480p' = @{
             Width = 854
             Height = 480
@@ -137,16 +158,64 @@ function Get-QualitySettings {
             AudioBitrate = '256k'
             Profile = 'high'
         }
+        '1440p' = @{
+            Width = 2560
+            Height = 1440
+            VideoBitrate = '10M'
+            AudioBitrate = '320k'
+            Profile = 'high'
+        }
+        '2160p' = @{
+            Width = 3840
+            Height = 2160
+            VideoBitrate = '20M'
+            AudioBitrate = '320k'
+            Profile = 'high'
+        }
         '4k' = @{
             Width = 3840
             Height = 2160
-            VideoBitrate = '15M'
+            VideoBitrate = '20M'
+            AudioBitrate = '320k'
+            Profile = 'high'
+        }
+        '4320p' = @{
+            Width = 7680
+            Height = 4320
+            VideoBitrate = '50M'
+            AudioBitrate = '320k'
+            Profile = 'high'
+        }
+        '8k' = @{
+            Width = 7680
+            Height = 4320
+            VideoBitrate = '50M'
             AudioBitrate = '320k'
             Profile = 'high'
         }
     }
-    
+
     return $settings[$Quality]
+}
+
+# Oblicza wartość bufsize na podstawie podanego bitrate
+function Get-BufferSize {
+    param([string]$Bitrate)
+
+    # Bitrate w kilobitach: np. "800k"
+    if ($Bitrate -match '^(\d+)k$') {
+        $kbps = [int]$Matches[1]
+        return "$($kbps * 2)k"
+    }
+    # Bitrate w megabitach: np. "2M"
+    elseif ($Bitrate -match '^(\d+)M$') {
+        $mbps = [int]$Matches[1]
+        return "$($mbps * 2)M"
+    }
+    else {
+        # Domyślna wartość, jeśli format jest inny niż oczekiwany
+        return "2M"
+    }
 }
 
 function Invoke-Transcode {
@@ -157,21 +226,23 @@ function Invoke-Transcode {
         [double]$Fps,
         [string]$Codec
     )
-    
+
     Write-Info "Transkodowanie do $($Settings.Height)p..."
-    
+
     $segmentDuration = 4
     $gopSize = [math]::Round($Fps * $segmentDuration)
-    
+
     Write-Info "FPS: $Fps, GOP size: $gopSize (keyframe co ${segmentDuration}s)"
-    
+
+    $bufsize = Get-BufferSize -Bitrate $Settings.VideoBitrate
+
     $ffmpegArgs = @(
         '-i', $InputFile,
-        '-c:v', $Codec, # Video codec: h264_nvenc (NVIDIA GPU), libx264 (CPU), h264_amf (AMD GPU), h264_qsv (Intel Quick Sync)
+        '-c:v', $Codec, # Kodek wideo: h264_nvenc (NVIDIA GPU), libx264 (CPU), h264_amf (AMD GPU), h264_qsv (Intel Quick Sync)
         '-profile:v', $Settings.Profile,
         '-b:v', $Settings.VideoBitrate,
         '-maxrate', $Settings.VideoBitrate,
-        '-bufsize', "$(([int]($Settings.VideoBitrate.TrimEnd('M')) * 2))M",
+        '-bufsize', $bufsize,
         '-vf', "scale=$($Settings.Width):$($Settings.Height)",
         '-g', $gopSize.ToString(),
         '-keyint_min', $gopSize.ToString(),
@@ -183,7 +254,7 @@ function Invoke-Transcode {
         $OutputFile
     )
 
-    # Redirect output to null to prevent it from entering the pipeline
+     # Przekierowanie wyjścia, żeby nic nie trafiało do potoku
     & ffmpeg $ffmpegArgs 2>&1 | Out-Null
 
     if ($LASTEXITCODE -eq 0) {
@@ -225,23 +296,19 @@ function Invoke-Segmentation {
         $filePath = $InputFiles[$quality]
 
         if (-not $SkipEncryption) {
-            # SECURITY FIX: Generate CEK in memory only - NO DISK WRITE!
+            # Generuje CEK tylko w pamieci
             $cek = -join ((1..16) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
             $kid = (New-Guid).ToString('N')
 
-            # REMOVED: $keyFile = Join-Path $qualityDir "$quality.key"
-            # REMOVED: Set-Content -Path $keyFile -Value $cek -NoNewline
-
             Write-Info "[$quality] CEK: [REDACTED - in memory only]"
             Write-Info "[$quality] KID: $kid"
-            # REMOVED: Write-Host "[$quality] Key file: $keyFile" -ForegroundColor Yellow
 
             $encryptionKeys += "label=$quality`:key_id=$kid`:key=$cek"
 
-            # Store CEK in memory (returned to caller, never saved to disk)
+            # Przechowuje metadane szyfrowania z CEK w pamieci
             $encryptionMetadata[$quality] = @{
                 KeyId = $kid
-                Cek = $cek  # SECURITY: In-memory only, returned to upload script
+                Cek = $cek  # Tylko w pamieci
                 Algorithm = 'AES-128-CTR'
             }
         }
@@ -274,10 +341,6 @@ function Invoke-Segmentation {
             '--clear_lead', '0'
         )
 
-        # SECURITY FIX: NO encryption.json file created - CEK stays in memory!
-        # REMOVED: $metaFile = Join-Path $OutputDir "encryption.json"
-        # REMOVED: $fullEncryptionMeta | ConvertTo-Json -Depth 5 | Set-Content $metaFile
-
         Write-Success "Szyfrowanie zakonczone - kazda jakosc ma SWOJ WLASNY CEK (in-memory only)!"
         Write-Info "SECURITY: CEK-i pozostaja w pamieci i zostana bezpiecznie przeslane do DRM Server"
 
@@ -285,7 +348,7 @@ function Invoke-Segmentation {
         Write-Info "Szyfrowanie pominiete (--SkipEncryption)"
     }
 
-    # Redirect output to null to prevent it from entering the pipeline
+    # Przekierowanie wyjścia, żeby nic nie trafiało do potoku
     & $ShakaPath $shakaArgs 2>&1 | Out-Null
 
     if ($LASTEXITCODE -eq 0) {
@@ -295,7 +358,7 @@ function Invoke-Segmentation {
         exit 1
     }
 
-    # SECURITY: Return encryption metadata with CEK in memory (not on disk!)
+    # Zwraca metadane szyfrowania do wywołującego (upload-content.ps1)
     return $encryptionMetadata
 }
 
@@ -340,7 +403,7 @@ function New-Metadata {
 
     Write-Info "Tworzenie metadanych..."
 
-    # Use provided title or fallback to filename
+    # Używa podanego tytułu lub nazwy pliku jako domyślnej wartości
     $finalTitle = if ([string]::IsNullOrEmpty($Title)) {
         [System.IO.Path]::GetFileNameWithoutExtension($InputFile)
     } else {
@@ -402,7 +465,7 @@ NEXA - Content Preparation Pipeline
         Kodek: $($videoInfo.Codec)
 "@  
     if ($Qualities -contains 'all') {
-        $Qualities = @('480p', '720p', '1080p', '4k')
+        $Qualities = @('144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', '4320p')
     }
     
     $processedQualities = @()
@@ -415,7 +478,7 @@ NEXA - Content Preparation Pipeline
         $settings = Get-QualitySettings -Quality $quality
         $tempFile = Join-Path $contentDir "temp_$quality.mp4"
 
-        # Use [void] to ensure function call doesn't add to pipeline
+        # Używa [void] aby zapobiec przekazywaniu wyjścia do potoku
         [void](Invoke-Transcode -InputFile $InputFile -OutputFile $tempFile -Settings $settings -Fps $videoInfo.Fps -Codec $Codec)
 
         $tempFilePaths[$quality] = $tempFile
@@ -434,7 +497,7 @@ NEXA - Content Preparation Pipeline
         $segmentParams.Add('SkipEncryption', $true)
     }
 
-    # SECURITY: Capture encryption metadata (CEK in memory) - returned from Invoke-Segmentation
+    # Zwraca metadane szyfrowania do wywołującego (upload-content.ps1)
     $encryptionData = Invoke-Segmentation @segmentParams
 
     Write-Info "Sprzatanie plikow tymczasowych..."
@@ -454,13 +517,13 @@ NEXA - Content Preparation Pipeline
     Write-Host "Lokalizacja: $contentDir" -ForegroundColor Yellow
     Write-Host "Jakosci: $($processedQualities -join ', ')" -ForegroundColor Yellow
 
-    # SECURITY: Return encryption data to caller (upload-content.ps1)
-    # CEK remains in memory, never written to disk
+    # Zwraca metadane szyfrowania do wywołującego (upload-content.ps1)
+    # CEK pozostaje w pamieci, nigdy nie jest zapisywany na dysku
     if (-not $SkipEncryption) {
         Write-Host "`nSECURITY: CEK-i zostana automatycznie przekazane do DRM Server (in-memory)" -ForegroundColor Green
     }
 
-    # Return structured result to upload-content.ps1
+    # Zwraca uporzadkowany wynik do upload-content.ps1
     $returnValue = @{
         ContentId = $ContentId
     }
@@ -472,5 +535,5 @@ NEXA - Content Preparation Pipeline
     return $returnValue
 }
 
-# Run main and return result (for use by upload-content.ps1)
+# Uruchamia główną funkcję i zwraca wynik (do użycia przez upload-content.ps1)
 Main

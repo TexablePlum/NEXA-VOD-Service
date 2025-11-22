@@ -15,8 +15,8 @@ public class DeviceKeyService
 {
     private readonly NexaDbContext _dbContext;
     private readonly CekPublicKeyEncryptionService _encryptionService;
-    private readonly ILogger<DeviceKeyService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<DeviceKeyService> _logger;
 
     private const int MaxDevicesPerUser = 10; // Limit urządzeń na użytkownika
 
@@ -25,13 +25,13 @@ public class DeviceKeyService
     public DeviceKeyService(
         NexaDbContext dbContext,
         CekPublicKeyEncryptionService encryptionService,
-        ILogger<DeviceKeyService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ILogger<DeviceKeyService> logger)
     {
         _dbContext = dbContext;
         _encryptionService = encryptionService;
-        _logger = logger;
         _configuration = configuration;
+        _logger = logger;
     }
 
     /// <summary>

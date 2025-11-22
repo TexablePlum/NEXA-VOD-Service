@@ -41,6 +41,9 @@ bld/
 content/storage/*
 !content/storage/.gitkeep
 
+# Temp upload directory
+temp-upload/
+
 # Database files
 *.db
 *.db-shm

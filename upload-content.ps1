@@ -5,10 +5,11 @@
     NEXA - Secure Content Upload Pipeline
 .DESCRIPTION
     Complete automated upload workflow:
-    1. Transcode & segment video (configurable codec)
-    2. Encrypt segments (CEK in-memory only)
-    3. Import CEK to DRM Server (secure API)
-    4. Create metadata
+    1. Generate admin JWT token
+    2. Transcode, segment & encrypt video (CEK in-memory only)
+    3. Register content + import CEKs to DRM Server (atomic operation)
+    4. Cleanup memory
+    5. Summary
 
     SECURITY: CEK keys are NEVER written to disk - only in memory
 .EXAMPLE
@@ -26,6 +27,10 @@
 .EXAMPLE
     # Upload with Intel Quick Sync
     .\upload-content.ps1 -InputFile "movie.mp4" -Codec "h264_qsv" -Title "Test" -Plan "free"
+
+.EXAMPLE
+    # Upload with full quality range (mobile to 8K)
+    .\upload-content.ps1 -InputFile "movie.mp4" -Qualities "144p","240p","480p","720p","1080p","1440p","2160p" -Plan "pro"
 #>
 
 [CmdletBinding()]
@@ -34,7 +39,7 @@ param(
     [string]$InputFile,
 
     [Parameter()]
-    [ValidateSet('480p', '720p', '1080p', '4k')]
+    [ValidateSet('144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', '4320p', '4k', '8k')]
     [string[]]$Qualities = @('720p'),
 
     [Parameter()]
@@ -54,14 +59,17 @@ param(
     [string]$ContentId,
 
     [Parameter()]
-    [string]$OutputDir = "./content/storage",
+    [string]$OutputDir = "./temp-upload",
 
     [Parameter()]
     [ValidateSet('h264_nvenc', 'libx264', 'h264_amf', 'h264_qsv')]
     [string]$Codec = 'h264_nvenc',
 
     [Parameter()]
-    [string]$DrmServerUrl = "http://localhost/api/admin/cek/import"
+    [string]$DrmServerUrl = "http://localhost/api/admin/cek/import",
+
+    [Parameter()]
+    [string]$ContentServerContainer = "nexa-content-server"
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,7 +132,7 @@ function Get-AdminToken {
     }
 }
 
-function Import-CekToServer {
+function Register-ContentWithCeks {
     param(
         [string]$ContentId,
         [hashtable]$EncryptionData,
@@ -132,49 +140,58 @@ function Import-CekToServer {
         [string]$ServerUrl
     )
 
-    Write-Info "Importowanie CEK do DRM Server..."
+    Write-Info "Rejestrowanie contentu i importowanie CEK-ów w DRM Server..."
 
-    $importedCount = 0
-    $totalQualities = $EncryptionData.Keys.Count
-
+    # Przygotuj array CEKs dla nowego API
+    $ceksArray = @()
     foreach ($quality in $EncryptionData.Keys) {
         $qualityData = $EncryptionData[$quality]
 
-        Write-Info "  Importowanie CEK dla jakości: $quality"
-
-        $body = @{
-            contentId = $ContentId
+        $ceksArray += @{
             quality = $quality
             cek = $qualityData.Cek
             keyId = $qualityData.KeyId
-        } | ConvertTo-Json -Compress
-
-        try {
-            $response = Invoke-RestMethod -Uri $ServerUrl `
-                -Method Post `
-                -Headers @{ Authorization = "Bearer $AdminToken" } `
-                -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
-                -ContentType "application/json"
-
-            Write-Success "  ✓ $quality - CEK zaimportowany (KeyId: $($qualityData.KeyId))"
-            $importedCount++
         }
-        catch {
-            $statusCode = $_.Exception.Response.StatusCode.value__
-            $errorMessage = $_.Exception.Message
 
-            Write-Failure "  ✗ $quality - Import failed (HTTP $statusCode): $errorMessage"
-
-            # Continue with other qualities even if one fails
-        }
+        Write-Info "  - Przygotowano CEK dla jakości: $quality (KeyId: $($qualityData.KeyId))"
     }
 
-    if ($importedCount -eq $totalQualities) {
-        Write-Success "Wszystkie CEK-i zaimportowane pomyślnie ($importedCount/$totalQualities)"
+    # Nowy endpoint - atomic registration with CEKs
+    $registerUrl = $ServerUrl -replace '/cek/import$', '/content/register'
+
+    $body = @{
+        contentId = $ContentId
+        ceks = $ceksArray
+    } | ConvertTo-Json -Depth 5
+
+    try {
+        $response = Invoke-RestMethod `
+            -Uri $registerUrl `
+            -Method Post `
+            -Headers @{ Authorization = "Bearer $AdminToken" } `
+            -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
+            -ContentType "application/json" `
+            -ErrorAction Stop
+
+        Write-Success "Content zarejestrowany pomyślnie!"
+        Write-Success "  ✓ Zaimportowano $($response.totalCeksImported) CEK(s): $($response.importedQualities -join ', ')"
+        Write-Info "  Required Plan: $($response.requiredPlan)"
+
+        if ($null -ne $response.releaseDate) {
+            Write-Info "  Release Date: $($response.releaseDate)"
+        }
+
         return $true
     }
-    else {
-        Write-Failure "Niepowodzenie importu niektórych CEK-ów ($importedCount/$totalQualities)"
+    catch {
+        $errorMessage = $_.Exception.Message
+        Write-Failure "Błąd podczas rejestracji contentu w DRM: $errorMessage"
+
+        if ($_.Exception.Response) {
+            $statusCode = $_.Exception.Response.StatusCode.value__
+            Write-Failure "  HTTP Status: $statusCode"
+        }
+
         return $false
     }
 }
@@ -220,10 +237,10 @@ if (-not [string]::IsNullOrEmpty($ReleaseDate)) {
 Write-Host ""
 
 # ========================================
-# STEP 1/6: Generate Admin Token
+# STEP 1/7: Generate Admin Token
 # ========================================
 
-Write-Progress-Step -Step 1 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Generowanie admin token..."
+Write-Progress-Step -Step 1 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Generowanie admin token..."
 
 $jwtSecret = $env:JWT_SECRET
 if ([string]::IsNullOrEmpty($jwtSecret)) {
@@ -241,10 +258,10 @@ catch {
 }
 
 # ========================================
-# STEP 2/6: Prepare Content (Transcode, Segment, Encrypt)
+# STEP 2/7: Prepare Content (Transcode, Segment, Encrypt)
 # ========================================
 
-Write-Progress-Step -Step 2 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Transkodowanie i segmentacja..."
+Write-Progress-Step -Step 2 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Transkodowanie i segmentacja..."
 
 Write-Info "Rozpoczynanie przygotowania contentu (kodek: $Codec)..."
 
@@ -289,67 +306,80 @@ catch {
 }
 
 # ========================================
-# STEP 3/6: Import CEK to DRM Server
+# STEP 3/7: Copy Content to Docker Volume
 # ========================================
 
-Write-Progress-Step -Step 3 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Importowanie kluczy szyfrowania..."
+Write-Progress-Step -Step 3 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Kopiowanie do Docker volume..."
+
+Write-Info "Kopiowanie contentu do Docker volume..."
+
+$localContentPath = Join-Path $OutputDir $contentId
+$dockerDestPath = "/app/content/"
+
+try {
+    # Verify Docker container is running
+    $containerStatus = docker inspect -f '{{.State.Running}}' $ContentServerContainer 2>$null
+    if ($containerStatus -ne 'true') {
+        throw "Container '$ContentServerContainer' nie jest uruchomiony. Uruchom: docker compose up -d"
+    }
+
+    # Copy content to Docker volume
+    $dockerCpCommand = "docker cp `"$localContentPath`" ${ContentServerContainer}:${dockerDestPath}"
+    Write-Info "Wykonuję: $dockerCpCommand"
+
+    docker cp $localContentPath "${ContentServerContainer}:${dockerDestPath}"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker cp zakończył się błędem (exit code: $LASTEXITCODE)"
+    }
+
+    Write-Success "Content skopiowany do Docker volume: ${ContentServerContainer}:${dockerDestPath}${contentId}"
+
+    # Cleanup temp directory
+    Write-Info "Usuwanie tymczasowego folderu: $localContentPath"
+    Remove-Item -Path $localContentPath -Recurse -Force
+    Write-Success "Tymczasowy folder usunięty"
+}
+catch {
+    Write-Failure "Błąd podczas kopiowania do Docker: $_"
+    Write-Info "Content pozostał w lokalizacji: $localContentPath"
+    exit 1
+}
+
+# ========================================
+# STEP 4/7: Register Content + Import CEKs (Atomic Operation)
+# ========================================
+
+Write-Progress-Step -Step 4 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Rejestrowanie contentu i importowanie CEK-ów..."
 
 if ($null -ne $encryptionData -and $encryptionData.Count -gt 0) {
     try {
-        $importSuccess = Import-CekToServer `
+        $registrationSuccess = Register-ContentWithCeks `
             -ContentId $contentId `
             -EncryptionData $encryptionData `
             -AdminToken $adminToken `
             -ServerUrl $DrmServerUrl
 
-        if (-not $importSuccess) {
-            Write-Failure "Nie wszystkie CEK-i zostały zaimportowane"
-            Write-Info "Możesz spróbować ręcznie zaimportować klucze później"
+        if (-not $registrationSuccess) {
+            Write-Failure "Nie udało się zarejestrować contentu w DRM Server"
+            exit 1
         }
     }
     catch {
-        Write-Failure "Błąd podczas importu CEK: $_"
-        Write-Info "Content został przygotowany, ale klucze nie zostały zaimportowane"
+        Write-Failure "Błąd podczas rejestracji contentu: $_"
+        Write-Info "Content został przygotowany w storage, ale nie został zarejestrowany w DRM"
         exit 1
     }
 }
 else {
-    Write-Info "Brak danych szyfrowania (content bez szyfrowania)"
+    Write-Info "Brak danych szyfrowania (content bez szyfrowania) - pomijanie rejestracji w DRM"
 }
 
 # ========================================
-# STEP 4/6: Register Content in DRM Server
+# STEP 5/7: Cleanup (Security)
 # ========================================
 
-Write-Progress-Step -Step 4 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Rejestrowanie contentu w DRM Server..."
-
-try {
-    $registerUrl = $DrmServerUrl -replace '/cek/import$', '/content/register'
-    $registerBody = @{
-        contentId = $contentId
-    } | ConvertTo-Json
-
-    $registerResponse = Invoke-RestMethod `
-        -Uri $registerUrl `
-        -Method Post `
-        -Headers @{ Authorization = "Bearer $adminToken" } `
-        -ContentType "application/json" `
-        -Body $registerBody `
-        -ErrorAction Stop
-
-    Write-Success "Content zarejestrowany w DRM Server"
-}
-catch {
-    Write-Failure "Błąd podczas rejestracji contentu w DRM: $_"
-    Write-Info "CEK zostały zaimportowane, ale content nie został zarejestrowany"
-    Write-Info "Możesz ręcznie wywołać: POST /api/admin/content/register"
-}
-
-# ========================================
-# STEP 5/6: Cleanup (Security)
-# ========================================
-
-Write-Progress-Step -Step 5 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Czyszczenie pamięci..."
+Write-Progress-Step -Step 5 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Czyszczenie pamięci..."
 
 # SECURITY: Clear sensitive data from memory
 $encryptionData = $null
@@ -359,10 +389,10 @@ $adminToken = $null
 Write-Success "Pamięć wyczyszczona (CEK usunięte)"
 
 # ========================================
-# STEP 6/6: Final Summary
+# STEP 6/7: Final Summary
 # ========================================
 
-Write-Progress-Step -Step 6 -TotalSteps 6 -Activity "Upload Pipeline" -Status "Zakończono!"
+Write-Progress-Step -Step 6 -TotalSteps 7 -Activity "Upload Pipeline" -Status "Zakończono!"
 Write-Progress -Activity "Upload Pipeline" -Completed
 
 Write-Host @"
@@ -384,6 +414,10 @@ Plan: $Plan
    ✓ CEK keys imported to DRM Server
    ✓ No plaintext keys on disk
    ✓ Memory cleared
+
+📦 Storage:
+   ✓ Content stored in Docker volume (${ContentServerContainer}:/app/content/${contentId})
+   ✓ Temp files cleaned up
 
 Content jest gotowy do streamingu!
 ========================================

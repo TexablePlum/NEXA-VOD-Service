@@ -45,7 +45,7 @@ public class UserDeviceKeyEntity
     public string PublicKeyPem { get; set; } = string.Empty;
 
     /// <summary>
-    /// TPM Attestation Quote (opcjonalne - do przyszłej weryfikacji TPM).
+    /// TPM Attestation Quote (TODO: do przyszłej weryfikacji TPM).
     /// Format: Base64 encoded TPM quote.
     /// </summary>
     [Column("tpm_attestation")]

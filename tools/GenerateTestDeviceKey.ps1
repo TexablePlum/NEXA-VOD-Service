@@ -1,18 +1,18 @@
 #!/usr/bin/env pwsh
 # GenerateTestDeviceKey.ps1
-# Generuje parę kluczy RSA-2048 do testowania device registration
+# Generuje parę kluczy RSA-2048 do testowania rejestracji urządzenia
 
 Write-Host "=== Test Device Key Generator ===" -ForegroundColor Cyan
 Write-Host "Generowanie pary kluczy RSA-2048..." -ForegroundColor Yellow
 
-# Generuj klucz RSA-2048
+# Generuje klucz RSA-2048
 $rsa = [System.Security.Cryptography.RSA]::Create(2048)
 
-# Eksportuj klucz publiczny w formacie PEM
+# Eksportuje klucz publiczny w formacie PEM
 $publicKeyBytes = $rsa.ExportSubjectPublicKeyInfo()
 $publicKeyBase64 = [Convert]::ToBase64String($publicKeyBytes)
 
-# Formatuj jako PEM (64 znaki na linię)
+# Formatuje jako PEM (64 znaki na linię)
 $pemLines = @()
 for ($i = 0; $i -lt $publicKeyBase64.Length; $i += 64) {
     $length = [Math]::Min(64, $publicKeyBase64.Length - $i)
@@ -28,10 +28,10 @@ Write-Host $publicKeyPem -ForegroundColor White
 
 Write-Host "`n=== JSON dla Swagger POST /api/device/register ===" -ForegroundColor Cyan
 
-# Escape newlines dla JSON (zamień prawdziwe \n na literalne ciągi "\n")
+# Zamiana prawdziwych znaków końca linii na ich dosłowne odpowiedniki "\n" do użycia w JSON
 $publicKeyPemEscaped = $publicKeyPem -replace "`r`n", "\n" -replace "`n", "\n"
 
-# Ręcznie formatuj JSON z prawidłowo escaped stringami
+# Ręczne złożenie JSON-a z poprawnie escapowanymi stringami
 $deviceId = "test-device-$(Get-Random -Minimum 1000 -Maximum 9999)"
 $jsonPayload = @"
 {
@@ -44,14 +44,14 @@ $jsonPayload = @"
 
 Write-Host $jsonPayload -ForegroundColor White
 
-# Zapisz klucze do plików
+# Zapisje klucze do plików
 $publicKeyPem | Out-File -FilePath "test_device_public.pem" -Encoding utf8 -NoNewline
 
-# Save private key in PEM format
+# Zapisuje klucz prywatny w formacie PEM
 $privateKeyBytes = $rsa.ExportPkcs8PrivateKey()
 $privateKeyBase64 = [Convert]::ToBase64String($privateKeyBytes)
 
-# Formatuj jako PEM (64 znaki na linię)
+# Formatuje jako PEM (64 znaki na linię)
 $privatePemLines = @()
 for ($i = 0; $i -lt $privateKeyBase64.Length; $i += 64) {
     $length = [Math]::Min(64, $privateKeyBase64.Length - $i)

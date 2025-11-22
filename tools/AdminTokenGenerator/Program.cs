@@ -6,24 +6,24 @@ using Microsoft.IdentityModel.Tokens;
 // ========================================
 // NEXA - Admin JWT Token Generator
 // ========================================
-// Generates admin JWT tokens for secure content upload operations
-// Usage: dotnet run -- [jwt-secret] [expiry-hours]
+// Generuje token JWT dla konta administratora z uprawnieniami do przesyłania treści.
+// Użycie: dotnet run -- [jwt-secret] [expiry-hours]
 
 Console.WriteLine("========================================");
 Console.WriteLine("NEXA - Admin JWT Token Generator");
 Console.WriteLine("========================================\n");
 
-// Parse arguments
+// Pobierz sekret JWT i czas wygaśnięcia z argumentów lub zmiennych środowiskowych
 string? jwtSecret = args.Length > 0 ? args[0] : Environment.GetEnvironmentVariable("JWT_SECRET");
 int expiryHours = args.Length > 1 && int.TryParse(args[1], out var hours) ? hours : 24;
 
 if (string.IsNullOrEmpty(jwtSecret))
 {
-    Console.WriteLine("✗ JWT_SECRET not provided");
-    Console.WriteLine("\nUsage:");
+    Console.WriteLine("✗ JWT_SECRET nie został podany");
+    Console.WriteLine("\nUżycie:");
     Console.WriteLine("  dotnet run -- <jwt-secret> [expiry-hours]");
-    Console.WriteLine("  dotnet run (reads from JWT_SECRET env var)");
-    Console.WriteLine("\nExample:");
+    Console.WriteLine("  dotnet run (odczytuje z zmiennej środowiskowej JWT_SECRET)");
+    Console.WriteLine("\nPrzykład:");
     Console.WriteLine("  dotnet run -- \"my-super-secret-key\" 24");
     Console.WriteLine("  dotnet run -- \"my-super-secret-key\" 1  # 1 hour expiry");
     return 1;
@@ -31,14 +31,14 @@ if (string.IsNullOrEmpty(jwtSecret))
 
 if (jwtSecret.Length < 32)
 {
-    Console.WriteLine("✗ JWT_SECRET too short (minimum 32 characters for security)");
-    Console.WriteLine($"  Current length: {jwtSecret.Length} characters");
+    Console.WriteLine("✗ JWT_SECRET jest za krótki (minimum 32 znaki dla bezpieczeństwa)");
+    Console.WriteLine($"  Aktualna długość: {jwtSecret.Length} znaków");
     return 1;
 }
 
 try
 {
-    // Generate admin JWT token
+    // Generuje token JWT dla konta administratora
     var tokenHandler = new JwtSecurityTokenHandler();
     var key = Encoding.UTF8.GetBytes(jwtSecret);
 
@@ -63,27 +63,27 @@ try
     var token = tokenHandler.CreateToken(tokenDescriptor);
     var tokenString = tokenHandler.WriteToken(token);
 
-    Console.WriteLine("✓ Admin JWT token generated successfully\n");
-    Console.WriteLine($"Expires: {tokenDescriptor.Expires:yyyy-MM-dd HH:mm:ss} UTC ({expiryHours}h from now)");
-    Console.WriteLine($"Issuer: {tokenDescriptor.Issuer}");
-    Console.WriteLine($"Audience: {tokenDescriptor.Audience}");
-    Console.WriteLine($"Role: admin");
-    Console.WriteLine($"Scopes: content:upload, cek:import");
+    Console.WriteLine("✓ Token JWT administratora wygenerowany pomyślnie\n");
+    Console.WriteLine($"Wygasa: {tokenDescriptor.Expires:yyyy-MM-dd HH:mm:ss} UTC ({expiryHours}h od teraz)");
+    Console.WriteLine($"Wystawca: {tokenDescriptor.Issuer}");
+    Console.WriteLine($"Odbiorca: {tokenDescriptor.Audience}");
+    Console.WriteLine($"Rola: admin");
+    Console.WriteLine($"Zakresy: content:upload, cek:import");
     Console.WriteLine("\n========================================");
-    Console.WriteLine("TOKEN (copy this):");
+    Console.WriteLine("TOKEN (kopiuj):");
     Console.WriteLine("========================================");
     Console.WriteLine(tokenString);
     Console.WriteLine("========================================\n");
 
-    Console.WriteLine("Usage in PowerShell:");
+    Console.WriteLine("Użycie w PowerShell:");
     Console.WriteLine($"  $env:ADMIN_TOKEN = \"{tokenString}\"");
-    Console.WriteLine("\nUsage in upload script:");
+    Console.WriteLine("\nUżycie w skrypcie przesyłania:");
     Console.WriteLine("  -Headers @{ Authorization = \"Bearer $env:ADMIN_TOKEN\" }");
 
     return 0;
 }
 catch (Exception ex)
 {
-    Console.WriteLine($"✗ Error generating token: {ex.Message}");
+    Console.WriteLine($"✗ Błąd podczas generowania tokenu: {ex.Message}");
     return 1;
 }

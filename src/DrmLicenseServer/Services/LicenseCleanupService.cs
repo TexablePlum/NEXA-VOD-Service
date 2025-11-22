@@ -69,7 +69,7 @@ public class LicenseCleanupService : BackgroundService
 
         try
         {
-            // Usuwa wygasłe licencje starsze niż retention period
+            // Usuwa wygasłe licencje starsze niż określony okres przechowywania
             var deletedLicensesCount = await dbContext.IssuedLicenses
                 .Where(l => l.ExpiresAt < cutoffDate)
                 .ExecuteDeleteAsync(ct);

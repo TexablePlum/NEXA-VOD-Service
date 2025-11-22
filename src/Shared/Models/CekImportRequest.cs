@@ -17,10 +17,12 @@ public class CekImportRequest
     public string ContentId { get; set; } = string.Empty;
 
     /// <summary>
-    /// Quality level (e.g., "480p", "720p", "1080p", "4k")
+    /// Quality level (144p - 8K)
+    /// Supported: 144p, 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, 4320p
     /// </summary>
     [Required(ErrorMessage = "Quality jest wymagany")]
-    [RegularExpression(@"^(480p|720p|1080p|4k)$", ErrorMessage = "Quality musi być: 480p, 720p, 1080p lub 4k")]
+    [RegularExpression(@"^(144p|240p|360p|480p|720p|1080p|1440p|2160p|4320p)$",
+        ErrorMessage = "Quality musi być jedną z: 144p, 240p, 360p, 480p, 720p, 1080p, 1440p, 2160p, 4320p")]
     public string Quality { get; set; } = string.Empty;
 
     /// <summary>

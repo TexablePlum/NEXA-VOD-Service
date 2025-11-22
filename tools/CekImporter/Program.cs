@@ -26,7 +26,7 @@ Console.WriteLine("========================================");
 Console.WriteLine($"Storage: {storagePath}");
 Console.WriteLine($"Redis: {redisHost}");
 
-// Walidacja master key
+// Walidacja master key-a
 byte[] masterKey;
 try
 {
@@ -135,7 +135,7 @@ foreach (var contentDir in contentDirs)
 
             var cekPlaintext = File.ReadAllText(keyFile).Trim();
 
-            // Szyfruje CEK za pomocą master keya
+            // Szyfruje CEK za pomocą master key-a
             string encryptedCek;
             try
             {
@@ -152,7 +152,7 @@ foreach (var contentDir in contentDirs)
             var cekValue = JsonSerializer.Serialize(new { EncryptedKey = encryptedCek, KeyId = keyId });
             db.StringSet(cekKey, cekValue);
 
-            // Dodaje jakość do Redis SET (dla szybkiego listingu)
+            // Dodaje jakość do Redis SET
             db.SetAdd(qualitiesSetKey, qualityName);
 
             Console.WriteLine($"  ✓ {qualityName}: KID={keyId} (encrypted)");

@@ -59,19 +59,26 @@ namespace Nexa.ContentServer.Services
         private void OnFileSystemChanged(object sender, FileSystemEventArgs e)
         {
             var fileName = Path.GetFileName(e.FullPath);
+            var dirName = Path.GetDirectoryName(e.FullPath);
+            var basePath = Path.GetFullPath(_basePath);
+
+            // Loguje wszytskie zmiany żeby zobaczyć co FileSystemWatcher widzi
+            _logger.LogInformation("FileSystemWatcher event: {ChangeType} | Path: {Path} | FileName: {FileName} | DirName: {DirName} | BasePath: {BasePath}",
+                e.ChangeType, e.FullPath, fileName, dirName, basePath);
 
             // Inwaliduje cache tylko gdy:
-            // 1. Zmieniono/dodano/usunięto metadata.json
-            // 2. Dodano/usunięto folder contentu
+            //  - Zmieniono/dodano/usunięto metadata.json
+            //  - Dodano/usunięto folder contentu (bezpośrednio w basePath)
             if (fileName == "metadata.json" ||
-                Path.GetDirectoryName(e.FullPath) == Path.GetFullPath(_basePath))
+                dirName == basePath)
             {
+                _logger.LogInformation("Triggering cache invalidation for change: {ChangeType} {Name}", e.ChangeType, e.Name);
                 InvalidateCache($"{e.ChangeType}: {e.Name}");
             }
             else
             {
                 // Ignoruje zmiany w segmentach wideo, miniaturach, etc.
-                _logger.LogDebug("Ignoring file system change: {ChangeType} {Name}", e.ChangeType, e.Name);
+                _logger.LogDebug("Ignoring file system change: {ChangeType} {Name} (not matching invalidation criteria)", e.ChangeType, e.Name);
             }
         }
 

@@ -28,7 +28,7 @@ namespace Nexa.ContentServer.Controllers
         /// </summary>
         /// <param name="limit">Maksymalna liczba wyników (default: 50, max: 100)</param>
         /// <param name="offset">Offset dla paginacji (default: 0)</param>
-        /// <param name="search">Opcjonalne: szukaj w tytułach</param>
+        /// <param name="search">Opcjonalne: szuka w tytułach</param>
         [HttpGet]
         [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "CatalogCache")]
         [ProducesResponseType(typeof(CatalogResponse), StatusCodes.Status200OK)]

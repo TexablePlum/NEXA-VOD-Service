@@ -1,14 +1,14 @@
 services:
-  # Nginx Reverse Proxy - Single entry point
+  # Nginx Reverse Proxy - Jedyny punkt wejścia do systemu
   nginx:
     image: nginx:alpine
     container_name: nexa-gateway
     ports:
       - "80:80"
-      # - "443:443"  # Uncomment for HTTPS
+      # - "443:443"  # TODO: Odkomentować dla HTTPS
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      # - ./ssl:/etc/nginx/ssl:ro  # Uncomment for HTTPS with certs
+      # - ./ssl:/etc/nginx/ssl:ro  # TODO: Odkomentować dla HTTPS z certyfikatami
     depends_on:
       - drm-server
       - content-server
@@ -60,7 +60,7 @@ services:
     container_name: nexa-drm-server
     env_file:
       - .env
-    # SECURITY: No external port - only accessible via nginx
+    # Brak mapowania portów - dostęp tylko przez nginx
     expose:
       - "8080"
     environment:
@@ -89,14 +89,14 @@ services:
     container_name: nexa-content-server
     env_file:
       - .env
-    # SECURITY: No external port - only accessible via nginx
+    # Brak mapowania portów - dostęp tylko przez nginx
     expose:
       - "8080"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - Redis__ConnectionString=redis:6379,password=${REDIS_PASSWORD:-}
       - ContentStorage__BasePath=/app/content
-      # JWT Configuration - SAME as DrmLicenseServer for validation!
+      # Konfiguracja JWT - Takie same jak DrmLicenseServer do walidacji!
       - Jwt__Secret=${JWT_SECRET}
       - Jwt__Issuer=${JWT_ISSUER}
       - Jwt__Audience=${JWT_AUDIENCE}
@@ -106,7 +106,7 @@ services:
     networks:
       - nexa-network
     volumes:
-      - ./content/storage:/app/content
+      - nexa-content-data:/app/content
     restart: unless-stopped
 
 networks:
@@ -116,3 +116,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  nexa-content-data:

@@ -6,8 +6,6 @@ namespace Nexa.DrmLicenseServer.Services;
 /// <summary>
 /// Serwis do szyfrowania/deszyfrowania CEK (Content Encryption Keys).
 /// Używa AES-256-GCM z master keyem do envelope encryption.
-///
-/// SECURITY:
 /// - CEK są szyfrowane przed zapisem do Redis (at-rest encryption)
 /// - Dodatkowe szyfrowanie kluczem publicznym użytkownika przed wysyłką
 /// </summary>

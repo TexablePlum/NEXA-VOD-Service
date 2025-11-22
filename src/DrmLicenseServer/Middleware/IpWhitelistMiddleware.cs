@@ -3,8 +3,8 @@ using System.Net;
 namespace Nexa.DrmLicenseServer.Middleware;
 
 /// <summary>
-/// Middleware do whitelisty IP – ogranicza dostêp do endpointów administracyjnych
-/// Pozwala na ¿¹dania tylko z localhost lub wewnêtrznej sieci Docker
+/// Middleware do whitelisty IP, ogranicza dostÄ™p do endpointÃ³w administracyjnych
+/// Pozwala na Å¼Ä…dania tylko z localhost lub wewnÄ™trznej sieci Docker
 /// </summary>
 public class IpWhitelistMiddleware
 {
@@ -37,8 +37,8 @@ public class IpWhitelistMiddleware
 
             IPNetwork.Parse("172.18.0.0/16"),  // Common Docker Compose range
 
-            // Sieci prywatne (RFC 1918) – bezpieczne, poniewa¿ endpoint jest za Nginx
-            // Wymagane, gdy host uzyskuje dostêp przez localhost za poœrednictwem Nginx
+            // Sieci prywatne (RFC 1918) â€“ bezpieczne, poniewaÅ¼ endpoint jest za Nginx
+            // Wymagane, gdy host uzyskuje dostÄ™p przez localhost za poÅ›rednictwem Nginx
             IPNetwork.Parse("10.0.0.0/8"),      // 10.0.0.0 - 10.255.255.255
             IPNetwork.Parse("192.168.0.0/16"),  // 192.168.0.0 - 192.168.255.255
         };
@@ -90,7 +90,7 @@ public class IpWhitelistMiddleware
             ipAddress = ipAddress.MapToIPv4();
         }
 
-        // Sprawdza, czy IP nale¿y do którejkolwiek z dozwolonych sieci
+        // Sprawdza, czy IP naleÅ¼y do ktÃ³rejkolwiek z dozwolonych sieci
         return _allowedNetworks.Any(network => network.Contains(ipAddress));
     }
 }

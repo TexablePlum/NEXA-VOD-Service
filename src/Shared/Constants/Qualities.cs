@@ -4,24 +4,38 @@ using System.Collections.Generic;
 namespace Nexa.Shared.Constants
 {
     /// <summary>
-    /// Stałe dla jakości wideo z hierarchią
+    /// Stałe dla jakości wideo z hierarchią (144p - 8K).
+    /// Wspiera pełny zakres standardowych rozdzielczości.
     /// </summary>
     public static class Qualities
     {
-        public const string Q480P = "480p";
-        public const string Q720P = "720p";
-        public const string Q1080P = "1080p";
-        public const string Q1440P = "1440p";
-        public const string Q2160P = "2160p";  // 4K
+        // Niskie jakości (mobile, słabe połączenia)
+        public const string Q144P = "144p";
+        public const string Q240P = "240p";
+        public const string Q360P = "360p";
+        public const string Q480P = "480p";   // SD
+
+        // Standardowe jakości
+        public const string Q720P = "720p";   // HD
+        public const string Q1080P = "1080p"; // Full HD
+
+        // Wysokie jakości (premium)
+        public const string Q1440P = "1440p"; // 2K
+        public const string Q2160P = "2160p"; // 4K / UHD
+        public const string Q4320P = "4320p"; // 8K
 
         // Hierarchia jakości (wyższa wartość = lepsza jakość)
         private static readonly Dictionary<string, int> QualityHierarchy = new()
         {
-            [Q480P] = 1,
-            [Q720P] = 2,
-            [Q1080P] = 3,
-            [Q1440P] = 4,
-            [Q2160P] = 5
+            [Q144P] = 1,
+            [Q240P] = 2,
+            [Q360P] = 3,
+            [Q480P] = 4,
+            [Q720P] = 5,
+            [Q1080P] = 6,
+            [Q1440P] = 7,
+            [Q2160P] = 8,
+            [Q4320P] = 9
         };
 
         /// <summary>
@@ -45,7 +59,7 @@ namespace Nexa.Shared.Constants
         }
 
         /// <summary>
-        /// Zwraca poziom hierarchii jakości (1-5)
+        /// Zwraca poziom hierarchii jakości (1-9, gdzie 1=144p, 9=8K)
         /// </summary>
         public static int GetLevel(string quality)
         {

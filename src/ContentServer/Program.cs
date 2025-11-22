@@ -233,8 +233,10 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 // Security Headers
 app.Use(async (context, next) =>
 {
-    // HSTS - wymusza HTTPS przez 1 rok (tylko jeśli request już jest HTTPS)
-    if (context.Request.IsHttps || app.Environment.IsProduction())
+    // HSTS - wymusza HTTPS przez 1 rok (TYLKO dla HTTPS requests)
+    // Sprawdza również X-Forwarded-Proto dla reverse proxy (nginx)
+    var forwardedProto = context.Request.Headers["X-Forwarded-Proto"].ToString();
+    if (context.Request.IsHttps || forwardedProto.Equals("https", StringComparison.OrdinalIgnoreCase))
     {
         context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }

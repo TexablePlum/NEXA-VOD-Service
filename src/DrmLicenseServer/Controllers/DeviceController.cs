@@ -1,35 +1,32 @@
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Nexa.DrmLicenseServer.Controllers.Base;
 using Nexa.DrmLicenseServer.Services;
 using Nexa.Shared.Models;
-using Nexa.Shared.Exceptions;
-using System.Security.Claims;
 
 namespace Nexa.DrmLicenseServer.Controllers;
 
 /// <summary>
 /// Controller do zarządzania urządzeniami użytkownika (device keys).
 /// Wymaga autentykacji JWT.
+/// używa BaseAuthenticatedController.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
-public class DeviceController : ControllerBase
+public class DeviceController : BaseAuthenticatedController
 {
     private readonly DeviceKeyService _deviceKeyService;
-    private readonly ILogger<DeviceController> _logger;
 
     public DeviceController(
         DeviceKeyService deviceKeyService,
+        UserService userService,
         ILogger<DeviceController> logger)
+        : base(userService, logger)
     {
         _deviceKeyService = deviceKeyService;
-        _logger = logger;
     }
 
     /// <summary>
     /// Rejestruje nowe urządzenie z public keyem.
-    /// Public key powinien być wygenerowany i zabezpieczony w TPM/TEE urządzenia.
     /// </summary>
     [HttpPost("register")]
     [ProducesResponseType(typeof(DeviceInfo), 200)]
@@ -40,14 +37,7 @@ public class DeviceController : ControllerBase
         [FromBody] DeviceRegistrationRequest request,
         CancellationToken ct)
     {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? User.FindFirst("sub")?.Value;
-
-        if (string.IsNullOrEmpty(userId))
-        {
-            _logger.LogWarning("JWT token missing userId claim");
-            throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
-        }
+        var userId = GetCurrentUserId();
 
         var device = await _deviceKeyService.RegisterDeviceAsync(
             userId,
@@ -76,15 +66,7 @@ public class DeviceController : ControllerBase
     [ProducesResponseType(typeof(ErrorResponse), 401)]
     public async Task<ActionResult<List<DeviceInfo>>> GetDevices(CancellationToken ct)
     {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? User.FindFirst("sub")?.Value;
-
-        if (string.IsNullOrEmpty(userId))
-        {
-            _logger.LogWarning("JWT token missing userId claim");
-            throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
-        }
-
+        var userId = GetCurrentUserId();
         var devices = await _deviceKeyService.GetUserDevicesAsync(userId, ct);
 
         return Ok(devices.Select(d => new DeviceInfo
@@ -109,15 +91,7 @@ public class DeviceController : ControllerBase
         string deviceId,
         CancellationToken ct)
     {
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? User.FindFirst("sub")?.Value;
-
-        if (string.IsNullOrEmpty(userId))
-        {
-            _logger.LogWarning("JWT token missing userId claim");
-            throw new UnauthorizedException("Token JWT nie zawiera identyfikatora użytkownika.");
-        }
-
+        var userId = GetCurrentUserId();
         await _deviceKeyService.RemoveDeviceAsync(userId, deviceId, ct);
 
         return Ok();

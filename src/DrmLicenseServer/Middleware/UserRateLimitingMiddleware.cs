@@ -133,7 +133,7 @@ public class UserRateLimitingMiddleware
 
     private int ParsePeriodToSeconds(string period)
     {
-        // SECURITY FIX: Lepsza walidacja formatu period
+        // walidacja formatu period
         if (string.IsNullOrWhiteSpace(period))
         {
             _logger.LogError("Period format is null or empty, using default 60s");
@@ -155,7 +155,7 @@ public class UserRateLimitingMiddleware
             return 60;
         }
 
-        // Convert do sekund z clampingiem 1s - 24h
+        // Konwertuje do sekund z clampingiem 1s - 24h
         int seconds = period[^1] switch
         {
             's' => value,

@@ -24,11 +24,13 @@ namespace Nexa.Shared.Constants
         };
 
         // Maksymalna jakość dla każdego planu
+        // L1 (z TPM): FREE=720p, BASIC=1080p, PRO=8K
+        // L3 (bez TPM): wszystkie plany ograniczone do max 720p
         private static readonly Dictionary<string, string> MaxQualityForPlan = new()
         {
-            [FREE] = Qualities.Q720P,
-            [BASIC] = Qualities.Q1080P,
-            [PRO] = Qualities.Q2160P  // 4K
+            [FREE] = Qualities.Q720P,    // HD
+            [BASIC] = Qualities.Q1080P,  // Full HD
+            [PRO] = Qualities.Q4320P     // 8K (max możliwa jakość)
         };
 
         /// <summary>

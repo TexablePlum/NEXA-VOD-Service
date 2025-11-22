@@ -72,5 +72,10 @@
         /// Plan subskrypcji niewystarczający do odtworzenia contentu (403).
         /// </summary>
         public const string INSUFFICIENT_PLAN = "INSUFFICIENT_PLAN";
+
+        /// <summary>
+        /// Content nie został jeszcze wypuszczony - premiera w przyszłości (403).
+        /// </summary>
+        public const string CONTENT_NOT_RELEASED = "CONTENT_NOT_RELEASED";
     }
 }
