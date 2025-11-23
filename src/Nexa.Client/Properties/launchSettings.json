@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Nexa.Client (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Nexa.Client (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
