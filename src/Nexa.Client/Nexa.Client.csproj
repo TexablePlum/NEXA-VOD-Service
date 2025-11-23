@@ -13,6 +13,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <None Remove="Views\NotificationOverlay.xaml" />
     <None Remove="Views\SplashPage.xaml" />
   </ItemGroup>
 
@@ -48,6 +49,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Shared\Nexa.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Page Update="Views\NotificationOverlay.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
   </ItemGroup>
   <ItemGroup>
     <Page Update="Views\SplashPage.xaml">

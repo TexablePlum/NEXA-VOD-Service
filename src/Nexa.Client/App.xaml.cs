@@ -7,12 +7,16 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using Nexa.Client.Configuration;
+using Nexa.Client.Services.Infrastructure;
+using Nexa.Client.Services.Notifications;
 using Nexa.Client.ViewModels;
 using Nexa.Client.Views;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http.Headers;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.Activation;
@@ -46,7 +50,24 @@ namespace Nexa.Client
             // Views
             services.AddTransient<SplashPage>();
 
-            // TODO: Services
+            // Services
+
+            // Konfiguracja HttpClient z użyciem AppConfig
+            services.AddHttpClient("NexaGateway", client =>
+            {
+                client.BaseAddress = new Uri(AppConfig.BaseApiUrl);
+                client.Timeout = TimeSpan.FromSeconds(AppConfig.DefaultRequestTimeoutSeconds);
+
+                // Domyślne nagłówki
+                client.DefaultRequestHeaders.Accept.Add(
+                    new MediaTypeWithQualityHeaderValue("application/json"));
+            });
+
+            // Serwis health check-ów
+            services.AddSingleton<ISystemHealthService, SystemHealthService>();
+
+            // Notyfikacje
+            services.AddSingleton<INotificationService, NotificationService>();
 
             return services.BuildServiceProvider();
         }
