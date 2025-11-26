@@ -24,7 +24,7 @@ namespace Nexa.Client.Services.ErrorHandling
 
             var statusCode = (int)response.StatusCode;
             string content = await response.Content.ReadAsStringAsync();
-            ErrorResponse errorResponse = null;
+            ErrorResponse? errorResponse = null;
 
             // Próba deserializacji jako standardowy ErrorResponse (NEXA Format)
             try
@@ -79,8 +79,8 @@ namespace Nexa.Client.Services.ErrorHandling
                     foreach (var property in errorsElement.EnumerateObject())
                     {
                         // Konwersja tablicy stringów na pojedynczy string lub listę
-                        var messages = property.Value.EnumerateArray().Select(x => x.GetString()).ToList();
-                        validationErrors[property.Name] = messages.Count == 1 ? messages[0] : messages;
+                        var messages = property.Value.EnumerateArray().Select(x => x.GetString()).Where(x => x != null).ToList();
+                        validationErrors[property.Name] = messages.Count == 1 ? messages[0]! : messages;
                     }
 
                     return new ErrorResponse

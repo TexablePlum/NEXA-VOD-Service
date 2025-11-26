@@ -12,7 +12,12 @@ namespace Nexa.Client.Services.Notifications
         public TimeSpan Duration { get; set; } = TimeSpan.FromSeconds(5);
         public Guid Id { get; } = Guid.NewGuid();
 
-        [ObservableProperty]
         private bool _isOpen = true;
+
+        public bool IsOpen
+        {
+            get => _isOpen;
+            set => SetProperty(ref _isOpen, value);
+        }
     }
 }

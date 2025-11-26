@@ -8,7 +8,7 @@ namespace Nexa.Client
     {
         public MainWindow()
         {
-            this.InitializeComponent();
+            InitializeComponent();
 
             // Rozszerza treœæ na pasek tytu³u
             ExtendsContentIntoTitleBar = true;

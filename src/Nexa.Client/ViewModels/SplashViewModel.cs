@@ -12,14 +12,26 @@ namespace Nexa.Client.ViewModels
         private readonly ISystemHealthService _healthService;
         private readonly INotificationService _notifications;
 
-        [ObservableProperty]
         private string _loadingText = "Inicjalizacja...";
+        public string LoadingText
+        {
+            get => _loadingText;
+            set => SetProperty(ref _loadingText, value);
+        }
 
-        [ObservableProperty]
         private bool _isRetryVisible = false;
+        public bool IsRetryVisible
+        {
+            get => _isRetryVisible;
+            set => SetProperty(ref _isRetryVisible, value);
+        }
 
-        [ObservableProperty]
         private bool _isLoading = true;
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set => SetProperty(ref _isLoading, value);
+        }
 
         // Event informujący widok, że można iść dalej
         public event EventHandler? InitializationCompleted;
@@ -91,7 +103,7 @@ namespace Nexa.Client.ViewModels
 
                 case SystemHealthStatus.ContentUnreachable:
                     _notifications.ShowWarning("Usługa katalogu filmów jest niedostępna.", "Błąd Serwera Treści");
-                    SetErrorState("Błąd systemu Content.");
+                    SetErrorState("Błąd serwisu treści.");
                     break;
             }
         }

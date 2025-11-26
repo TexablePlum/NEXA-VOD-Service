@@ -14,11 +14,11 @@ namespace Nexa.Client.Services.Validation
         /// </summary>
         public static void Validate<T>(T model)
         {
-            var context = new ValidationContext(model);
+            var context = new ValidationContext(model!);
             var results = new List<ValidationResult>();
 
             bool isValid = System.ComponentModel.DataAnnotations.Validator.TryValidateObject(
-                model, context, results, validateAllProperties: true);
+                model!, context, results, validateAllProperties: true);
 
             if (!isValid)
             {

@@ -5,9 +5,11 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:viewmodels="using:Nexa.Client.ViewModels"
+    xmlns:converters="using:Nexa.Client.Converters"
     mc:Ignorable="d">
 
     <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <Storyboard x:Name="AuroraAnimation">
             <DoubleAnimation Storyboard.TargetName="Aurora1Data" Storyboard.TargetProperty="TranslateX"
                              From="-100" To="100" Duration="0:0:12" AutoReverse="True" RepeatBehavior="Forever">
@@ -125,16 +127,23 @@
             <StackPanel Grid.Row="2" Spacing="15" VerticalAlignment="Top">
                 <TextBlock Text="{x:Bind ViewModel.LoadingText, Mode=OneWay}"
                            HorizontalAlignment="Center"
-                           Foreground="#AAFFFFFF" 
+                           Foreground="#AAFFFFFF"
                            FontSize="14"
                            FontWeight="Normal"
                            CharacterSpacing="100"/>
 
-                <ProgressBar IsIndeterminate="True" 
-                             Width="150" 
+                <ProgressBar IsIndeterminate="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
+                             Width="150"
                              Height="2"
                              Foreground="{ThemeResource SystemAccentColorLight2}"
                              Background="#33FFFFFF"/>
+
+                <Button Content="Spróbuj ponownie"
+                        HorizontalAlignment="Center"
+                        Margin="0,10,0,0"
+                        Command="{x:Bind ViewModel.RetryCommand}"
+                        Visibility="{x:Bind ViewModel.IsRetryVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Style="{ThemeResource AccentButtonStyle}"/>
             </StackPanel>
 
             <TextBlock Grid.Row="4" 
