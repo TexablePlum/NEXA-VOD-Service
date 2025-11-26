@@ -60,6 +60,13 @@ public partial class AuthViewModel : ObservableObject
         set => SetProperty(ref _rememberMe, value);
     }
 
+    private string _selectedPlan = "free"; // Domyślnie Free plan
+    public string SelectedPlan
+    {
+        get => _selectedPlan;
+        set => SetProperty(ref _selectedPlan, value);
+    }
+
     private bool _isLoginMode = true;
     public bool IsLoginMode
     {
@@ -179,7 +186,7 @@ public partial class AuthViewModel : ObservableObject
 
         try
         {
-            var response = await _authService.RegisterAsync(Email, Password, plan: "free", rememberMe: RememberMe);
+            var response = await _authService.RegisterAsync(Email, Password, plan: SelectedPlan, rememberMe: RememberMe);
 
             _notifications.ShowSuccess($"Witaj w NEXA, {response.User.Email}!", "Rejestracja pomyślna");
 

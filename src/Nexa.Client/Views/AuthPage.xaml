@@ -11,6 +11,59 @@
     <Page.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
+        <converters:PlanToBoolConverter x:Key="PlanToBoolConverter"/>
+
+        <!-- Style dla kart planów -->
+        <Style x:Key="PlanCardRadioButtonStyle" TargetType="RadioButton">
+            <Setter Property="Background" Value="#10FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#33FFFFFF"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Padding" Value="16,12"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="RootBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CheckStates">
+                                    <VisualState x:Name="Checked">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.BorderBrush" Value="{ThemeResource SystemAccentColorLight2}"/>
+                                            <Setter Target="RootBorder.BorderThickness" Value="2"/>
+                                            <Setter Target="RootBorder.Background" Value="#20FFFFFF"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Unchecked"/>
+                                </VisualStateGroup>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Background" Value="#18FFFFFF"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Background" Value="#15FFFFFF"/>
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!-- Aurora Animation - identyczna jak w SplashPage -->
         <Storyboard x:Name="AuroraAnimation">
@@ -186,6 +239,93 @@
                                        FontSize="13"
                                        Margin="12,0,0,0"
                                        Visibility="{x:Bind ViewModel.ConfirmPasswordError, Mode=OneWay, Converter={StaticResource StringToVisibilityConverter}}"/>
+                        </StackPanel>
+
+                        <!-- Wybór planu (tylko w trybie Register) -->
+                        <StackPanel Spacing="12"
+                                    Margin="0,16,0,0"
+                                    Visibility="{x:Bind ViewModel.IsRegisterMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                            <TextBlock Text="Wybierz plan:"
+                                       Foreground="#AAFFFFFF"
+                                       FontSize="15"
+                                       FontWeight="SemiBold"/>
+
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Free Plan -->
+                                <RadioButton Grid.Column="0"
+                                             GroupName="PlanSelection"
+                                             IsChecked="{x:Bind ViewModel.SelectedPlan, Mode=TwoWay, Converter={StaticResource PlanToBoolConverter}, ConverterParameter=free}"
+                                             Style="{StaticResource PlanCardRadioButtonStyle}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="&#xE946;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="24"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="{ThemeResource SystemAccentColorLight2}"/>
+                                        <TextBlock Text="Free"
+                                                   FontSize="16"
+                                                   FontWeight="Bold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="White"/>
+                                        <TextBlock Text="720p HD"
+                                                   FontSize="13"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="#AAFFFFFF"/>
+                                    </StackPanel>
+                                </RadioButton>
+
+                                <!-- Basic Plan -->
+                                <RadioButton Grid.Column="1"
+                                             GroupName="PlanSelection"
+                                             IsChecked="{x:Bind ViewModel.SelectedPlan, Mode=TwoWay, Converter={StaticResource PlanToBoolConverter}, ConverterParameter=basic}"
+                                             Style="{StaticResource PlanCardRadioButtonStyle}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="&#xE8B7;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="24"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="#7000FF"/>
+                                        <TextBlock Text="Basic"
+                                                   FontSize="16"
+                                                   FontWeight="Bold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="White"/>
+                                        <TextBlock Text="1080p Full HD"
+                                                   FontSize="13"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="#AAFFFFFF"/>
+                                    </StackPanel>
+                                </RadioButton>
+
+                                <!-- Pro Plan -->
+                                <RadioButton Grid.Column="2"
+                                             GroupName="PlanSelection"
+                                             IsChecked="{x:Bind ViewModel.SelectedPlan, Mode=TwoWay, Converter={StaticResource PlanToBoolConverter}, ConverterParameter=pro}"
+                                             Style="{StaticResource PlanCardRadioButtonStyle}">
+                                    <StackPanel Spacing="6">
+                                        <TextBlock Text="&#xE734;"
+                                                   FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="24"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="#00BFFF"/>
+                                        <TextBlock Text="Pro"
+                                                   FontSize="16"
+                                                   FontWeight="Bold"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="White"/>
+                                        <TextBlock Text="8K Ultra HD"
+                                                   FontSize="13"
+                                                   HorizontalAlignment="Center"
+                                                   Foreground="#AAFFFFFF"/>
+                                    </StackPanel>
+                                </RadioButton>
+                            </Grid>
                         </StackPanel>
 
                         <!-- Remember Me (tylko w trybie Login) -->
