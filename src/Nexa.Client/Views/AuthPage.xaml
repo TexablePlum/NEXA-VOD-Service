@@ -10,6 +10,7 @@
 
     <Page.Resources>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
 
         <!-- Aurora Animation - identyczna jak w SplashPage -->
         <Storyboard x:Name="AuroraAnimation">
@@ -153,7 +154,7 @@
                                        Foreground="#FF6B6B"
                                        FontSize="13"
                                        Margin="12,0,0,0"
-                                       Visibility="{x:Bind ViewModel.EmailError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                       Visibility="{x:Bind ViewModel.EmailError, Mode=OneWay, Converter={StaticResource StringToVisibilityConverter}}"/>
                         </StackPanel>
 
                         <!-- Hasło -->
@@ -168,7 +169,7 @@
                                        Foreground="#FF6B6B"
                                        FontSize="13"
                                        Margin="12,0,0,0"
-                                       Visibility="{x:Bind ViewModel.PasswordError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                       Visibility="{x:Bind ViewModel.PasswordError, Mode=OneWay, Converter={StaticResource StringToVisibilityConverter}}"/>
                         </StackPanel>
 
                         <!-- Potwierdź hasło (tylko w trybie Register) -->
@@ -184,7 +185,7 @@
                                        Foreground="#FF6B6B"
                                        FontSize="13"
                                        Margin="12,0,0,0"
-                                       Visibility="{x:Bind ViewModel.ConfirmPasswordError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                       Visibility="{x:Bind ViewModel.ConfirmPasswordError, Mode=OneWay, Converter={StaticResource StringToVisibilityConverter}}"/>
                         </StackPanel>
 
                         <!-- Remember Me (tylko w trybie Login) -->
