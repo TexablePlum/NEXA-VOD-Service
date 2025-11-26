@@ -53,6 +53,13 @@ public partial class AuthViewModel : ObservableObject
         }
     }
 
+    private bool _rememberMe = true; // Domyślnie zaznaczone
+    public bool RememberMe
+    {
+        get => _rememberMe;
+        set => SetProperty(ref _rememberMe, value);
+    }
+
     private bool _isLoginMode = true;
     public bool IsLoginMode
     {
@@ -138,7 +145,7 @@ public partial class AuthViewModel : ObservableObject
 
         try
         {
-            var response = await _authService.LoginAsync(Email, Password);
+            var response = await _authService.LoginAsync(Email, Password, RememberMe);
 
             _notifications.ShowSuccess($"Witaj, {response.User.Email}!", "Zalogowano pomyślnie");
 
@@ -172,7 +179,7 @@ public partial class AuthViewModel : ObservableObject
 
         try
         {
-            var response = await _authService.RegisterAsync(Email, Password, plan: "free");
+            var response = await _authService.RegisterAsync(Email, Password, plan: "free", rememberMe: RememberMe);
 
             _notifications.ShowSuccess($"Witaj w NEXA, {response.User.Email}!", "Rejestracja pomyślna");
 

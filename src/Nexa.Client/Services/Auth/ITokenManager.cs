@@ -4,7 +4,8 @@ namespace Nexa.Client.Services.Auth;
 
 /// <summary>
 /// Interfejs zarządzania tokenami autoryzacji.
-/// AccessToken jest przechowywany w pamięci RAM, RefreshToken w bezpiecznym storage (ProtectedData).
+/// AccessToken jest przechowywany w pamięci RAM.
+/// RefreshToken może być w pamięci RAM lub Windows Credential Manager (opcja "Remember Me").
 /// </summary>
 public interface ITokenManager
 {
@@ -19,7 +20,9 @@ public interface ITokenManager
     /// <param name="accessToken">JWT Access Token</param>
     /// <param name="refreshToken">Refresh Token</param>
     /// <param name="expiresInSeconds">Czas życia Access Token w sekundach</param>
-    void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds);
+    /// <param name="email">Email użytkownika (do identyfikacji w Credential Manager)</param>
+    /// <param name="persistRefreshToken">Czy zapisać RefreshToken w Windows Credential Manager (Remember Me)</param>
+    void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds, string email, bool persistRefreshToken = false);
 
     /// <summary>
     /// Pobiera aktualny Access Token jeśli jest ważny.
@@ -28,7 +31,7 @@ public interface ITokenManager
     string? GetAccessToken();
 
     /// <summary>
-    /// Pobiera Refresh Token z bezpiecznego storage.
+    /// Pobiera Refresh Token z pamięci RAM lub Credential Manager.
     /// </summary>
     /// <returns>Refresh Token lub null jeśli nie istnieje</returns>
     string? GetRefreshToken();
@@ -46,7 +49,7 @@ public interface ITokenManager
     bool IsAuthenticated();
 
     /// <summary>
-    /// Czyści wszystkie tokeny (wylogowanie).
+    /// Czyści wszystkie tokeny (wylogowanie) - z RAM i Credential Manager.
     /// </summary>
     void ClearTokens();
 
@@ -54,4 +57,27 @@ public interface ITokenManager
     /// Pobiera czas wygaśnięcia Access Token.
     /// </summary>
     DateTime? GetAccessTokenExpiry();
+
+    /// <summary>
+    /// Sprawdza czy istnieje zapisany RefreshToken w Windows Credential Manager.
+    /// </summary>
+    /// <param name="email">Email użytkownika jeśli znaleziono credential</param>
+    /// <returns>True jeśli istnieje zapisany token</returns>
+    bool HasSavedRefreshToken(out string? email);
+
+    /// <summary>
+    /// Usuwa zapisany RefreshToken z Windows Credential Manager.
+    /// </summary>
+    /// <param name="email">Email użytkownika którego token ma być usunięty</param>
+    void RemoveSavedRefreshToken(string email);
+
+    /// <summary>
+    /// Pobiera email aktualnie zalogowanego użytkownika.
+    /// </summary>
+    string? GetCurrentEmail();
+
+    /// <summary>
+    /// Sprawdza czy ostatnie StoreTokens użyło persistRefreshToken = true.
+    /// </summary>
+    bool IsPersisted();
 }

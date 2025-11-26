@@ -16,6 +16,7 @@ namespace Nexa.Client.Views
 
             this.Loaded += SplashPage_Loaded;
             ViewModel.InitializationCompleted += ViewModel_InitializationCompleted;
+            ViewModel.AutoLoginSucceeded += ViewModel_AutoLoginSucceeded;
         }
 
         private void SplashPage_Loaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
@@ -28,6 +29,12 @@ namespace Nexa.Client.Views
         {
             // Po udanej inicjalizacji przejdź do strony autoryzacji
             Frame.Navigate(typeof(AuthPage));
+        }
+
+        private void ViewModel_AutoLoginSucceeded(object? sender, Nexa.Shared.Models.UserInfo e)
+        {
+            // Auto-login się powiódł - przejdź od razu do MainPage
+            Frame.Navigate(typeof(MainPage), e);
         }
     }
 }

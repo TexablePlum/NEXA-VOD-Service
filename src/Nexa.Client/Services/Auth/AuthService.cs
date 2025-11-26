@@ -22,7 +22,7 @@ public class AuthService : BaseApiService, IAuthService
     }
 
     /// <inheritdoc/>
-    public async Task<AuthResponse> LoginAsync(string email, string password, CancellationToken ct = default)
+    public async Task<AuthResponse> LoginAsync(string email, string password, bool rememberMe = true, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(email))
             throw new ArgumentException("Email nie może być pusty", nameof(email));
@@ -43,13 +43,13 @@ public class AuthService : BaseApiService, IAuthService
         );
 
         // Przechowaj tokeny i ustaw Authorization header
-        StoreTokensAndSetHeader(response);
+        StoreTokensAndSetHeader(response, rememberMe);
 
         return response;
     }
 
     /// <inheritdoc/>
-    public async Task<AuthResponse> RegisterAsync(string email, string password, string plan = "free", CancellationToken ct = default)
+    public async Task<AuthResponse> RegisterAsync(string email, string password, string plan = "free", bool rememberMe = true, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(email))
             throw new ArgumentException("Email nie może być pusty", nameof(email));
@@ -71,7 +71,7 @@ public class AuthService : BaseApiService, IAuthService
         );
 
         // Przechowaj tokeny i ustaw Authorization header
-        StoreTokensAndSetHeader(response);
+        StoreTokensAndSetHeader(response, rememberMe);
 
         return response;
     }
@@ -97,8 +97,9 @@ public class AuthService : BaseApiService, IAuthService
             ct
         );
 
-        // Przechowaj nowe tokeny i zaktualizuj Authorization header
-        StoreTokensAndSetHeader(response);
+        // Przechowaj nowe tokeny z tą samą opcją persist co poprzednio
+        var persistRefreshToken = _tokenManager.IsPersisted();
+        StoreTokensAndSetHeader(response, persistRefreshToken);
 
         return response;
     }
@@ -149,16 +150,18 @@ public class AuthService : BaseApiService, IAuthService
     /// <summary>
     /// Pomocnicza metoda do przechowywania tokenów i ustawiania Authorization header.
     /// </summary>
-    private void StoreTokensAndSetHeader(AuthResponse response)
+    private void StoreTokensAndSetHeader(AuthResponse response, bool rememberMe)
     {
         if (response == null)
             throw new ArgumentNullException(nameof(response));
 
-        // Przechowaj tokeny w TokenManager
+        // Przechowuj tokeny w TokenManager
         _tokenManager.StoreTokens(
             response.AccessToken,
             response.RefreshToken,
-            response.ExpiresIn
+            response.ExpiresIn,
+            response.User.Email,
+            rememberMe
         );
 
         // Ustaw Bearer token dla przyszłych requestów

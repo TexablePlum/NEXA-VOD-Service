@@ -15,9 +15,10 @@ public interface IAuthService
     /// </summary>
     /// <param name="email">Email użytkownika</param>
     /// <param name="password">Hasło</param>
+    /// <param name="rememberMe">Czy zapisać RefreshToken w Windows Credential Manager (Remember Me)</param>
     /// <param name="ct">CancellationToken</param>
     /// <returns>AuthResponse z danymi użytkownika i tokenami</returns>
-    Task<AuthResponse> LoginAsync(string email, string password, CancellationToken ct = default);
+    Task<AuthResponse> LoginAsync(string email, string password, bool rememberMe = true, CancellationToken ct = default);
 
     /// <summary>
     /// Rejestruje nowego użytkownika i przechowuje tokeny.
@@ -25,9 +26,10 @@ public interface IAuthService
     /// <param name="email">Email użytkownika</param>
     /// <param name="password">Hasło</param>
     /// <param name="plan">Plan subskrypcji (domyślnie "free")</param>
+    /// <param name="rememberMe">Czy zapisać RefreshToken w Windows Credential Manager (Remember Me)</param>
     /// <param name="ct">CancellationToken</param>
     /// <returns>AuthResponse z danymi użytkownika i tokenami</returns>
-    Task<AuthResponse> RegisterAsync(string email, string password, string plan = "free", CancellationToken ct = default);
+    Task<AuthResponse> RegisterAsync(string email, string password, string plan = "free", bool rememberMe = true, CancellationToken ct = default);
 
     /// <summary>
     /// Odświeża wygasły access token używając refresh tokenu.

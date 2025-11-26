@@ -187,6 +187,14 @@
                                        Visibility="{x:Bind ViewModel.ConfirmPasswordError, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                         </StackPanel>
 
+                        <!-- Remember Me (tylko w trybie Login) -->
+                        <CheckBox IsChecked="{x:Bind ViewModel.RememberMe, Mode=TwoWay}"
+                                  Content="Zapamiętaj mnie"
+                                  Foreground="#AAFFFFFF"
+                                  FontSize="14"
+                                  Margin="0,8,0,0"
+                                  Visibility="{x:Bind ViewModel.IsLoginMode, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
+
                         <!-- Forgot Password (tylko w trybie Login) -->
                         <HyperlinkButton Content="Zapomniałeś hasła?"
                                          HorizontalAlignment="Right"
