@@ -15,12 +15,19 @@ namespace Nexa.Client.Views
             ViewModel = App.Current.Services.GetRequiredService<SplashViewModel>();
 
             this.Loaded += SplashPage_Loaded;
+            ViewModel.InitializationCompleted += ViewModel_InitializationCompleted;
         }
 
         private void SplashPage_Loaded(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             AuroraAnimation.Begin();
             LogoEntrance.Begin();
+        }
+
+        private void ViewModel_InitializationCompleted(object? sender, System.EventArgs e)
+        {
+            // Po udanej inicjalizacji przejdź do strony autoryzacji
+            Frame.Navigate(typeof(AuthPage));
         }
     }
 }

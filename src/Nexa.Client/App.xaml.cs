@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
 using Nexa.Client.Configuration;
+using Nexa.Client.Services.Auth;
 using Nexa.Client.Services.Infrastructure;
 using Nexa.Client.Services.Notifications;
 using Nexa.Client.ViewModels;
@@ -46,9 +47,12 @@ namespace Nexa.Client
 
             // ViewModels
             services.AddTransient<SplashViewModel>();
+            services.AddTransient<AuthViewModel>();
 
             // Views
             services.AddTransient<SplashPage>();
+            services.AddTransient<AuthPage>();
+            services.AddTransient<MainPage>();
 
             // Services
 
@@ -68,6 +72,17 @@ namespace Nexa.Client
 
             // Notyfikacje
             services.AddSingleton<INotificationService, NotificationService>();
+
+            // Autoryzacja
+            services.AddSingleton<ITokenManager, TokenManager>();
+            services.AddSingleton<IAuthService>(sp =>
+            {
+                var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+                var httpClient = httpClientFactory.CreateClient("NexaGateway");
+                var tokenManager = sp.GetRequiredService<ITokenManager>();
+                return new AuthService(httpClient, tokenManager);
+            });
+            services.AddSingleton<TokenRefreshService>();
 
             return services.BuildServiceProvider();
         }
