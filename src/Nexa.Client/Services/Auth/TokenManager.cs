@@ -104,6 +104,14 @@ public class TokenManager : ITokenManager
             return LoadRefreshTokenFromVault(_currentEmail);
         }
 
+        // Fallback: Po restarcie _currentEmail jest null, więc szukaj w Vault
+        if (HasSavedRefreshToken(out var savedEmail) && !string.IsNullOrEmpty(savedEmail))
+        {
+            _currentEmail = savedEmail; // Zapamiętaj email dla przyszłych wywołań
+            _isPersisted = true; // Token był w Vault, więc był persisted
+            return LoadRefreshTokenFromVault(savedEmail);
+        }
+
         return null;
     }
 
