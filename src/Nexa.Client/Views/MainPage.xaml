@@ -89,7 +89,7 @@
                     Background="#10FFFFFF"
                     BorderBrush="#20FFFFFF"
                     BorderThickness="0,0,0,1"
-                    Padding="24,16">
+                    Padding="24,48,24,16">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -114,7 +114,7 @@
                                     QuerySubmitted="SearchBox_QuerySubmitted"/>
 
                     <!-- User Info + Logout -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,140,0">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
                                        FontSize="12"
