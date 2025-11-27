@@ -234,21 +234,21 @@
 
                                                     <!-- TODO: Właściwa miniaturka z JWT -->
                                                     <!-- <Image Source="{x:Bind ThumbnailUrl}" Stretch="UniformToFill"/> -->
-                                                </Grid>
 
-                                                <!-- Plan Badge -->
-                                                <Border Background="{x:Bind RequiredPlan, Converter={StaticResource PlanColorConverter}}"
-                                                        CornerRadius="4"
-                                                        Padding="8,4"
-                                                        HorizontalAlignment="Right"
-                                                        VerticalAlignment="Top"
-                                                        Margin="8">
-                                                    <TextBlock Text="{x:Bind RequiredPlan}"
-                                                               FontSize="10"
-                                                               FontWeight="Bold"
-                                                               Foreground="White"
-                                                               CharacterSpacing="100"/>
-                                                </Border>
+                                                    <!-- Plan Badge -->
+                                                    <Border Background="{x:Bind RequiredPlan, Converter={StaticResource PlanColorConverter}}"
+                                                            CornerRadius="4"
+                                                            Padding="8,4"
+                                                            HorizontalAlignment="Right"
+                                                            VerticalAlignment="Top"
+                                                            Margin="8">
+                                                        <TextBlock Text="{x:Bind RequiredPlan}"
+                                                                   FontSize="10"
+                                                                   FontWeight="Bold"
+                                                                   Foreground="White"
+                                                                   CharacterSpacing="100"/>
+                                                    </Border>
+                                                </Grid>
                                             </Border>
 
                                             <!-- Info -->
