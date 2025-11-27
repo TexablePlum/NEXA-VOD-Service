@@ -18,9 +18,13 @@ namespace Nexa.Client.Converters
                 {
                     return $"{(int)timeSpan.TotalHours}h {timeSpan.Minutes}m";
                 }
+                else if (timeSpan.TotalMinutes >= 1)
+                {
+                    return $"{timeSpan.Minutes} min {timeSpan.Seconds} s";
+                }
                 else
                 {
-                    return $"{timeSpan.Minutes}m";
+                    return $"{timeSpan.Seconds} s";
                 }
             }
 
