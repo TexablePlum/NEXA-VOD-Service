@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
 using Nexa.Client.Configuration;
 using Nexa.Client.Services.Auth;
+using Nexa.Client.Services.Catalog;
 using Nexa.Client.Services.Infrastructure;
 using Nexa.Client.Services.Notifications;
 using Nexa.Client.ViewModels;
@@ -49,6 +50,7 @@ namespace Nexa.Client
             // ViewModels
             services.AddTransient<SplashViewModel>();
             services.AddTransient<AuthViewModel>();
+            services.AddTransient<MainPageViewModel>();
 
             // Views
             services.AddTransient<SplashPage>();
@@ -84,6 +86,14 @@ namespace Nexa.Client
                 return new AuthService(httpClient, tokenManager);
             });
             services.AddSingleton<TokenRefreshService>();
+
+            // Katalog filmów
+            services.AddSingleton<ICatalogService>(sp =>
+            {
+                var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+                var httpClient = httpClientFactory.CreateClient("NexaGateway");
+                return new CatalogService(httpClient, AppConfig.BaseApiUrl);
+            });
 
             return services.BuildServiceProvider();
         }

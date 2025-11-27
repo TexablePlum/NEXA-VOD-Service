@@ -3,7 +3,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Nexa.Client.Services.Auth;
+using Nexa.Client.ViewModels;
 using Nexa.Shared.Models;
+using System;
 
 namespace Nexa.Client.Views;
 
@@ -13,17 +15,20 @@ public sealed partial class MainPage : Page
     private readonly TokenRefreshService _tokenRefreshService;
     private UserInfo? _currentUser;
 
+    public MainPageViewModel ViewModel { get; }
+
     public MainPage()
     {
         this.InitializeComponent();
 
         _authService = App.Current.Services.GetRequiredService<IAuthService>();
         _tokenRefreshService = App.Current.Services.GetRequiredService<TokenRefreshService>();
+        ViewModel = App.Current.Services.GetRequiredService<MainPageViewModel>();
 
         this.Loaded += MainPage_Loaded;
     }
 
-    protected override void OnNavigatedTo(NavigationEventArgs e)
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
 
@@ -31,10 +36,12 @@ public sealed partial class MainPage : Page
         if (e.Parameter is UserInfo userInfo)
         {
             _currentUser = userInfo;
-            UpdateUserInfo();
 
             // Uruchom automatyczne odświeżanie tokenów w tle
             _tokenRefreshService.Start();
+
+            // Załaduj katalog filmów
+            await ViewModel.InitializeAsync();
         }
     }
 
@@ -52,16 +59,6 @@ public sealed partial class MainPage : Page
         AuroraAnimation.Begin();
     }
 
-    private void UpdateUserInfo()
-    {
-        if (_currentUser != null)
-        {
-            WelcomeText.Text = $"Witaj w NEXA!";
-            UserEmailText.Text = _currentUser.Email;
-            UserPlanText.Text = $"Plan: {_currentUser.Plan.ToUpper()}";
-        }
-    }
-
     private void LogoutButton_Click(object sender, RoutedEventArgs e)
     {
         // Wyloguj użytkownika
@@ -69,5 +66,28 @@ public sealed partial class MainPage : Page
 
         // Nawiguj z powrotem do AuthPage
         Frame.Navigate(typeof(AuthPage));
+    }
+
+    private void MovieGrid_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is ContentMetadata movie)
+        {
+            ViewModel.SelectMovieCommand.Execute(movie);
+        }
+    }
+
+    private void ScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+    {
+        var scrollViewer = sender as ScrollViewer;
+        if (scrollViewer == null) return;
+
+        // Załaduj więcej filmów gdy użytkownik przewinie blisko końca
+        var verticalOffset = scrollViewer.VerticalOffset;
+        var maxVerticalOffset = scrollViewer.ScrollableHeight;
+
+        if (maxVerticalOffset - verticalOffset < 500 && !ViewModel.IsLoading && ViewModel.CanLoadMore)
+        {
+            _ = ViewModel.LoadMoreCommand.ExecuteAsync(null);
+        }
     }
 }
