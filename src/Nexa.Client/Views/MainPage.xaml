@@ -148,7 +148,7 @@
                         <StackPanel Orientation="Horizontal"
                                     HorizontalAlignment="Center"
                                     Spacing="24"
-                                    Margin="120,0,230,0">
+                                    Margin="110,0,230,0">
                         <!-- Logo -->
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE714;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White"/>

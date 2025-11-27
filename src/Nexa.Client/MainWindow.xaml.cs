@@ -18,8 +18,8 @@ namespace Nexa.Client
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
 
-            // Ustaw minimalny rozmiar okna (1200x700)
-            SetMinimumWindowSize(1200, 700);
+            // Ustaw minimalny rozmiar okna (1220x700)
+            SetMinimumWindowSize(1220, 700);
 
             // Startuje od Splash Screena
             AppFrame.Navigate(typeof(SplashPage));
