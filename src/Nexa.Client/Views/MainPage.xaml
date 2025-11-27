@@ -89,7 +89,8 @@
                             HorizontalAlignment="Center">
                     <FontIcon Glyph="&#xE714;"
                               FontFamily="Segoe MDL2 Assets"
-                              FontSize="42">
+                              FontSize="42"
+                              Margin="0,7,0,0">
                         <FontIcon.Foreground>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                 <GradientStop Color="White" Offset="0.3"/>
