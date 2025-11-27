@@ -109,21 +109,15 @@
                                 BorderThickness="1"
                                 BorderBrush="#40FFFFFF"/>
 
-                        <Button Content="&#xE8B7;"
-                                FontFamily="Segoe MDL2 Assets"
-                                ToolTipService.ToolTip="Katalog"
-                                Background="Transparent"
-                                Foreground="#AAFFFFFF"
-                                Padding="12,8"
-                                CornerRadius="4"/>
-
                         <Button Content="&#xE006;"
                                 FontFamily="Segoe MDL2 Assets"
                                 ToolTipService.ToolTip="Moje filmy"
                                 Background="Transparent"
                                 Foreground="#AAFFFFFF"
                                 Padding="12,8"
-                                CornerRadius="4"/>
+                                CornerRadius="4"
+                                IsEnabled="False"
+                                Opacity="0.5"/>
                     </StackPanel>
 
                     <!-- User Info + Logout (Right) - Layer 1 -->
