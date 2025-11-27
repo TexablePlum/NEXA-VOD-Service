@@ -124,13 +124,19 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="24,0,0,0">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
-                                       FontSize="12"
+                                       FontSize="11"
                                        Foreground="#AAFFFFFF"
                                        HorizontalAlignment="Right"/>
-                            <TextBlock Text="{x:Bind ViewModel.UserPlan, Mode=OneWay}"
-                                       FontSize="10"
-                                       Foreground="#88FFFFFF"
-                                       HorizontalAlignment="Right"/>
+                            <Border Background="#2000BFFF"
+                                    BorderBrush="#5000BFFF"
+                                    BorderThickness="1"
+                                    CornerRadius="3"
+                                    Padding="6,1"
+                                    HorizontalAlignment="Right">
+                                <TextBlock Text="{x:Bind ViewModel.UserPlan, Mode=OneWay}"
+                                           FontSize="10"
+                                           Foreground="White"/>
+                            </Border>
                         </StackPanel>
 
                         <Button Content="Wyloguj"
@@ -150,9 +156,9 @@
                                     Spacing="24"
                                     Margin="110,0,230,0">
                         <!-- Logo -->
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE714;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White"/>
-                            <TextBlock Text="NEXA" FontSize="20" FontWeight="Bold" Foreground="White" CharacterSpacing="100"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE714;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White" VerticalAlignment="Center" Margin="0,0,0,-3"/>
+                            <TextBlock Text="NEXA" FontSize="20" FontWeight="Bold" Foreground="White" CharacterSpacing="100" VerticalAlignment="Center"/>
                         </StackPanel>
 
                         <!-- Search Box -->
@@ -173,8 +179,7 @@
                                             Background="Transparent"
                                             BorderThickness="0"
                                             Foreground="White"
-                                            QuerySubmitted="SearchBox_QuerySubmitted"
-                                            Margin="8,0">
+                                            QuerySubmitted="SearchBox_QuerySubmitted">
                                 <AutoSuggestBox.Resources>
                                     <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
                                     <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
