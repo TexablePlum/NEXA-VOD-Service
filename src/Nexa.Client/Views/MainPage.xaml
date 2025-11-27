@@ -108,13 +108,13 @@
                                     PlaceholderText="Szukaj filmów..."
                                     Text="{x:Bind ViewModel.SearchQuery, Mode=TwoWay}"
                                     QueryIcon="Find"
-                                    MaxWidth="400"
+                                    MaxWidth="600"
                                     Margin="32,0"
                                     HorizontalAlignment="Center"
                                     QuerySubmitted="SearchBox_QuerySubmitted"/>
 
                     <!-- User Info + Logout -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,140,0">
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
                                        FontSize="12"
