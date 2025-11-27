@@ -90,4 +90,9 @@ public sealed partial class MainPage : Page
             _ = ViewModel.LoadMoreCommand.ExecuteAsync(null);
         }
     }
+
+    private void SearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        _ = ViewModel.SearchCommand.ExecuteAsync(null);
+    }
 }

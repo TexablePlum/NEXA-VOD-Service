@@ -1,4 +1,6 @@
 using Nexa.Shared.Models;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Nexa.Client.Services.Catalog
 {
