@@ -91,47 +91,133 @@
                     BorderThickness="0,0,0,1"
                     Padding="24,48,24,16">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
 
-                    <!-- Logo -->
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <FontIcon Glyph="&#xE714;" FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="White"/>
-                        <TextBlock Text="NEXA" FontSize="20" FontWeight="Bold" Foreground="White" CharacterSpacing="100"/>
-                    </StackPanel>
+                    <!-- Top Row: Logo + User Info -->
+                    <Grid Grid.Row="0" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
 
-                    <!-- Search Box -->
-                    <AutoSuggestBox Grid.Column="1"
-                                    PlaceholderText="Szukaj filmów..."
-                                    Text="{x:Bind ViewModel.SearchQuery, Mode=TwoWay}"
-                                    QueryIcon="Find"
-                                    MaxWidth="600"
-                                    Margin="32,0"
-                                    HorizontalAlignment="Center"
-                                    QuerySubmitted="SearchBox_QuerySubmitted"/>
+                        <!-- Empty left space for balance -->
+                        <Grid Grid.Column="0"/>
 
-                    <!-- User Info + Logout -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
-                        <StackPanel Spacing="2">
-                            <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
-                                       FontSize="12"
-                                       Foreground="#AAFFFFFF"
-                                       HorizontalAlignment="Right"/>
-                            <TextBlock Text="{x:Bind ViewModel.UserPlan, Mode=OneWay}"
-                                       FontSize="10"
-                                       Foreground="#88FFFFFF"
-                                       HorizontalAlignment="Right"/>
+                        <!-- Logo (Center) -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
+                            <FontIcon Glyph="&#xE714;"
+                                      FontFamily="Segoe MDL2 Assets"
+                                      FontSize="28">
+                                <FontIcon.Foreground>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#7000FF" Offset="0"/>
+                                        <GradientStop Color="#00BFFF" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </FontIcon.Foreground>
+                            </FontIcon>
+                            <TextBlock Text="NEXA"
+                                       FontSize="24"
+                                       FontWeight="Bold"
+                                       CharacterSpacing="150"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Foreground>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="White" Offset="0.3"/>
+                                        <GradientStop Color="#CCCCFF" Offset="1.0"/>
+                                    </LinearGradientBrush>
+                                </TextBlock.Foreground>
+                            </TextBlock>
                         </StackPanel>
 
-                        <Button Content="Wyloguj"
-                                Click="LogoutButton_Click"
-                                Background="#20FFFFFF"
-                                Foreground="White"
-                                Padding="16,8"/>
-                    </StackPanel>
+                        <!-- User Info + Logout (Right) -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
+                                           FontSize="12"
+                                           Foreground="#AAFFFFFF"
+                                           HorizontalAlignment="Right"/>
+                                <TextBlock Text="{x:Bind ViewModel.UserPlan, Mode=OneWay}"
+                                           FontSize="10"
+                                           Foreground="#88FFFFFF"
+                                           HorizontalAlignment="Right"/>
+                            </StackPanel>
+
+                            <Button Content="Wyloguj"
+                                    Click="LogoutButton_Click"
+                                    Background="#20FFFFFF"
+                                    Foreground="White"
+                                    Padding="16,8"
+                                    CornerRadius="4"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Bottom Row: Navigation + Search -->
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Navigation Menu (Left) -->
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                            <Button Content="&#xE80F;"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    ToolTipService.ToolTip="Strona główna"
+                                    Background="#20FFFFFF"
+                                    Foreground="White"
+                                    Padding="12,8"
+                                    CornerRadius="4"
+                                    BorderThickness="1"
+                                    BorderBrush="#40FFFFFF"/>
+
+                            <Button Content="&#xE8B7;"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    ToolTipService.ToolTip="Katalog"
+                                    Background="Transparent"
+                                    Foreground="#AAFFFFFF"
+                                    Padding="12,8"
+                                    CornerRadius="4"/>
+
+                            <Button Content="&#xE006;"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    ToolTipService.ToolTip="Moje filmy"
+                                    Background="Transparent"
+                                    Foreground="#AAFFFFFF"
+                                    Padding="12,8"
+                                    CornerRadius="4"/>
+                        </StackPanel>
+
+                        <!-- Search Box (Center-Right) -->
+                        <Border Grid.Column="1"
+                                Background="#15FFFFFF"
+                                CornerRadius="8"
+                                BorderBrush="#30FFFFFF"
+                                BorderThickness="1"
+                                Margin="16,0,0,0"
+                                MaxWidth="800">
+                            <Border.Shadow>
+                                <ThemeShadow/>
+                            </Border.Shadow>
+
+                            <AutoSuggestBox PlaceholderText="Szukaj filmów w katalogu..."
+                                            Text="{x:Bind ViewModel.SearchQuery, Mode=TwoWay}"
+                                            QueryIcon="Find"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Foreground="White"
+                                            QuerySubmitted="SearchBox_QuerySubmitted"
+                                            Margin="8,0">
+                                <AutoSuggestBox.Resources>
+                                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
+                                </AutoSuggestBox.Resources>
+                            </AutoSuggestBox>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Border>
 
