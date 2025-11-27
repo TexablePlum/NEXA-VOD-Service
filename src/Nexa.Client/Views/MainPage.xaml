@@ -96,6 +96,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
@@ -128,7 +129,7 @@
                                 CornerRadius="4"/>
                     </StackPanel>
 
-                    <!-- Elastic space -->
+                    <!-- Elastic space LEFT -->
                     <Grid Grid.Column="1"/>
 
                     <!-- Logo -->
@@ -165,8 +166,11 @@
                         </AutoSuggestBox>
                     </Border>
 
+                    <!-- Elastic space RIGHT -->
+                    <Grid Grid.Column="4"/>
+
                     <!-- User Info + Logout (Right) -->
-                    <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="24,0,0,0">
+                    <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="24,0,0,0">
                         <StackPanel Spacing="2">
                             <TextBlock Text="{x:Bind ViewModel.UserEmail, Mode=OneWay}"
                                        FontSize="12"
