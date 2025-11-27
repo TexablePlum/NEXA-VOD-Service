@@ -81,5 +81,29 @@ namespace Nexa.ContentServer.Controllers
             var content = await _catalogService.GetContentByIdAsync(id, cancellationToken);
             return Ok(content);
         }
+
+        /// <summary>
+        /// GET /api/catalog/{id}/thumbnail.jpg
+        /// Zwraca miniaturkę filmu.
+        /// Publiczny endpoint - nie wymaga autoryzacji.
+        /// Cache przez 1 godzinę.
+        /// </summary>
+        [HttpGet("{id}/thumbnail.jpg")]
+        [Microsoft.AspNetCore.OutputCaching.OutputCache(Duration = 3600)] // 1 godzina
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
+        public IActionResult GetThumbnail(string id)
+        {
+            _logger.LogInformation("GET /api/catalog/{Id}/thumbnail.jpg", id);
+            var thumbnailPath = _catalogService.GetThumbnailPath(id);
+
+            return PhysicalFile(
+                Path.GetFullPath(thumbnailPath),
+                "image/jpeg",
+                enableRangeProcessing: true
+            );
+        }
     }
 }

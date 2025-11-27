@@ -4,7 +4,7 @@ using Nexa.Shared.Exceptions;
 namespace Nexa.ContentServer.Services
 {
     /// <summary>
-    /// Serwis do obsługi streamingu: manifesty, segmenty, thumbnails.
+    /// Serwis do obsługi streamingu: manifesty i segmenty.
     /// Waliduje parametry i sprawdza dostępność plików.
     /// </summary>
     public class StreamingService
@@ -125,37 +125,6 @@ namespace Nexa.ContentServer.Services
 
             // Domyślnie
             return "application/octet-stream";
-        }
-
-        /// <summary>
-        /// Pobiera ścieżkę do miniaturki filmu.
-        /// Rzuca wyjątek jeśli miniaturka nie istnieje.
-        /// </summary>
-        public string GetThumbnailPath(string contentId)
-        {
-            if (string.IsNullOrWhiteSpace(contentId) || contentId.Contains(".."))
-            {
-                throw new ValidationException("Invalid content ID");
-            }
-
-            var thumbnailPath = Path.Combine(_basePath, contentId, "thumbnail.jpg");
-
-            var fullBasePath = Path.GetFullPath(_basePath);
-            var fullThumbnailPath = Path.GetFullPath(thumbnailPath);
-
-            if (!fullThumbnailPath.StartsWith(fullBasePath, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning("Path traversal attempt blocked for thumbnail: {ContentId}", contentId);
-                throw new ValidationException("Invalid content ID");
-            }
-
-            if (!File.Exists(thumbnailPath))
-            {
-                _logger.LogWarning("Thumbnail not found: {ContentId}", contentId);
-                throw new ThumbnailNotFoundException(contentId);
-            }
-
-            return thumbnailPath;
         }
     }
 }

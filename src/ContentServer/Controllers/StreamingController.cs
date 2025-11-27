@@ -6,7 +6,7 @@ using Nexa.Shared.Models;
 namespace Nexa.ContentServer.Controllers
 {
     /// <summary>
-    /// Controller do serwowania plików wideo: manifesty, segmenty, thumbnails.
+    /// Controller do serwowania plików wideo: manifesty i segmenty.
     /// Wymaga autentykacji JWT dla wszystkich endpointów streamingu.
     /// Klient musi posiadać ważny JWT token otrzymany z DrmLicenseServer.
     /// </summary>
@@ -79,28 +79,6 @@ namespace Nexa.ContentServer.Controllers
             return PhysicalFile(
                 Path.GetFullPath(segmentPath),
                 mimeType,
-                enableRangeProcessing: true
-            );
-        }
-
-        /// <summary>
-        /// GET /content/{id}/thumbnail.jpg
-        /// Zwraca miniaturkę filmu.
-        /// Output Cache: 1h.
-        /// </summary>
-        [HttpGet("{contentId}/thumbnail.jpg")]
-        [Microsoft.AspNetCore.OutputCaching.OutputCache(Duration = 3600)] // 1 godzina
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
-        [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status500InternalServerError)]
-        public IActionResult GetThumbnail(string contentId)
-        {
-            var thumbnailPath = _streamingService.GetThumbnailPath(contentId);
-
-            return PhysicalFile(
-                Path.GetFullPath(thumbnailPath),
-                "image/jpeg",
                 enableRangeProcessing: true
             );
         }
