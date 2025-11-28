@@ -37,7 +37,18 @@ namespace Nexa.Client.Services.Catalog
                 url += $"&search={Uri.EscapeDataString(search)}";
             }
 
-            return await GetAsync<CatalogResponse>(url, ct);
+            var response = await GetAsync<CatalogResponse>(url, ct);
+
+            // Napraw URL miniaturek (dodaj base URL jeśli relatywny)
+            foreach (var item in response.Items)
+            {
+                if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http"))
+                {
+                    item.ThumbnailUrl = $"{_baseUrl}{item.ThumbnailUrl}";
+                }
+            }
+
+            return response;
         }
 
         /// <inheritdoc/>
@@ -47,7 +58,14 @@ namespace Nexa.Client.Services.Catalog
                 throw new ArgumentException("Content ID nie może być pusty", nameof(contentId));
 
             var url = $"{_baseUrl}/api/catalog/{contentId}";
-            return await GetAsync<ContentMetadata>(url, ct);
+            var item = await GetAsync<ContentMetadata>(url, ct);
+
+            if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http"))
+            {
+                item.ThumbnailUrl = $"{_baseUrl}{item.ThumbnailUrl}";
+            }
+
+            return item;
         }
     }
 }

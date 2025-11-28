@@ -95,4 +95,13 @@ public sealed partial class MainPage : Page
     {
         _ = ViewModel.SearchCommand.ExecuteAsync(null);
     }
+
+    private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+    {
+        if (sender is Image image)
+        {
+            // Ukryj obrazek, aby pokazać placeholder (FontIcon) pod spodem
+            image.Visibility = Visibility.Collapsed;
+        }
+    }
 }

@@ -15,14 +15,15 @@ public interface ITokenManager
     event EventHandler? AccessTokenExpired;
 
     /// <summary>
-    /// Przechowuje tokeny w bezpieczny sposób.
+    /// Przechowuje tokeny i informacje o użytkowniku.
     /// </summary>
-    /// <param name="accessToken">JWT Access Token</param>
-    /// <param name="refreshToken">Refresh Token</param>
-    /// <param name="expiresInSeconds">Czas życia Access Token w sekundach</param>
-    /// <param name="email">Email użytkownika (do identyfikacji w Credential Manager)</param>
-    /// <param name="persistRefreshToken">Czy zapisać RefreshToken w Windows Credential Manager (Remember Me)</param>
-    void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds, string email, bool persistRefreshToken = false);
+    /// <param name="accessToken">Access token</param>
+    /// <param name="refreshToken">Refresh token</param>
+    /// <param name="expiresInSeconds">Czas ważności access tokenu</param>
+    /// <param name="email">Email użytkownika</param>
+    /// <param name="plan">Plan użytkownika (free, basic, pro)</param>
+    /// <param name="persistRefreshToken">Czy zapisać refresh token w Credential Manager (Remember Me)</param>
+    void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds, string email, string plan, bool persistRefreshToken = false);
 
     /// <summary>
     /// Pobiera aktualny Access Token jeśli jest ważny.
@@ -35,6 +36,11 @@ public interface ITokenManager
     /// </summary>
     /// <returns>Refresh Token lub null jeśli nie istnieje</returns>
     string? GetRefreshToken();
+
+    /// <summary>
+    /// Zwraca zapisany plan użytkownika.
+    /// </summary>
+    string? GetUserPlan();
 
     /// <summary>
     /// Sprawdza czy Access Token jest nadal ważny.

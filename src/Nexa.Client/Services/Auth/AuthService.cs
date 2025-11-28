@@ -161,6 +161,7 @@ public class AuthService : BaseApiService, IAuthService
             response.RefreshToken,
             response.ExpiresIn,
             response.User.Email,
+            response.User.Plan,
             rememberMe
         );
 

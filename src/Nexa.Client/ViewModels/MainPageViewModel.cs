@@ -110,8 +110,9 @@ namespace Nexa.Client.ViewModels
                 UserEmail = "Użytkownik";
             }
 
-            // TODO: Pobierz plan z tokenu JWT lub z osobnego endpointu
-            UserPlan = "Free";
+            // Pobierz plan z TokenManager
+            var plan = _tokenManager.GetUserPlan();
+            UserPlan = !string.IsNullOrEmpty(plan) ? plan : "Free";
         }
 
         [RelayCommand]

@@ -23,7 +23,7 @@ public class TokenManager : ITokenManager
     public event EventHandler? AccessTokenExpired;
 
     /// <inheritdoc/>
-    public void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds, string email, bool persistRefreshToken = false)
+    public void StoreTokens(string accessToken, string refreshToken, int expiresInSeconds, string email, string plan, bool persistRefreshToken = false)
     {
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new ArgumentException("Access token nie może być pusty", nameof(accessToken));
@@ -42,6 +42,10 @@ public class TokenManager : ITokenManager
         _accessTokenExpiry = DateTime.UtcNow.AddSeconds(expiresInSeconds);
         _currentEmail = email;
         _isPersisted = persistRefreshToken;
+
+        // Zapisz plan w LocalSettings
+        var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+        localSettings.Values["UserPlan"] = plan;
 
         if (persistRefreshToken)
         {
@@ -116,6 +120,13 @@ public class TokenManager : ITokenManager
     }
 
     /// <inheritdoc/>
+    public string? GetUserPlan()
+    {
+        var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+        return localSettings.Values["UserPlan"] as string;
+    }
+
+    /// <inheritdoc/>
     public bool IsAccessTokenValid(int bufferSeconds = 60)
     {
         if (_accessToken == null || _accessTokenExpiry == null)
@@ -145,6 +156,10 @@ public class TokenManager : ITokenManager
         {
             RemoveSavedRefreshToken(_currentEmail);
         }
+
+        // Usuń plan z LocalSettings
+        var localSettings = Windows.Storage.ApplicationData.Current.LocalSettings;
+        localSettings.Values.Remove("UserPlan");
 
         _currentEmail = null;
         _isPersisted = false;
