@@ -418,7 +418,7 @@ function New-Metadata {
         SourceResolution = "$($VideoInfo.Width)x$($VideoInfo.Height)"
         CreatedAt = (Get-Date -Format "o")
         ManifestUrl = "/content/$ContentId/manifest.mpd"
-        ThumbnailUrl = "/content/$ContentId/thumbnail.jpg"
+        ThumbnailUrl = "/api/catalog/$ContentId/thumbnail.jpg"
 
         Description = $Description
         ReleaseDate = $ReleaseDate

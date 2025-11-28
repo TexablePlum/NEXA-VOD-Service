@@ -19,31 +19,63 @@ namespace Nexa.Client.ViewModels
         private readonly INotificationService _notificationService;
         private CancellationTokenSource? _loadCts;
 
-        [ObservableProperty]
         private string _userEmail = string.Empty;
+        public string UserEmail
+        {
+            get => _userEmail;
+            set => SetProperty(ref _userEmail, value);
+        }
 
-        [ObservableProperty]
         private string _userPlan = "Free";
+        public string UserPlan
+        {
+            get => _userPlan;
+            set => SetProperty(ref _userPlan, value);
+        }
 
-        [ObservableProperty]
         private bool _isLoading;
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set => SetProperty(ref _isLoading, value);
+        }
 
-        [ObservableProperty]
         private bool _hasError;
+        public bool HasError
+        {
+            get => _hasError;
+            set => SetProperty(ref _hasError, value);
+        }
 
-        [ObservableProperty]
         private string _errorMessage = string.Empty;
+        public string ErrorMessage
+        {
+            get => _errorMessage;
+            set => SetProperty(ref _errorMessage, value);
+        }
 
-        [ObservableProperty]
         private string _searchQuery = string.Empty;
+        public string SearchQuery
+        {
+            get => _searchQuery;
+            set => SetProperty(ref _searchQuery, value);
+        }
 
         public ObservableCollection<ContentMetadata> Movies { get; } = new();
 
-        [ObservableProperty]
         private int _totalMovies;
+        public int TotalMovies
+        {
+            get => _totalMovies;
+            set => SetProperty(ref _totalMovies, value);
+        }
 
-        [ObservableProperty]
         private bool _canLoadMore;
+        public bool CanLoadMore
+        {
+            get => _canLoadMore;
+            set => SetProperty(ref _canLoadMore, value);
+        }
 
         private int _currentOffset = 0;
         private const int PageSize = 20;

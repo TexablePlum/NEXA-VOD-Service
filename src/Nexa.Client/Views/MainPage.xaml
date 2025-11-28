@@ -288,8 +288,9 @@
                                                               HorizontalAlignment="Center"
                                                               VerticalAlignment="Center"/>
 
-                                                    <!-- TODO: Właściwa miniaturka z JWT -->
-                                                    <!-- <Image Source="{x:Bind ThumbnailUrl}" Stretch="UniformToFill"/> -->
+                                                    <!-- Miniaturka filmu z crop-to-fit (przycinanie zamiast rozciągania) -->
+                                                    <Image Source="{x:Bind ThumbnailUrl, Mode=OneTime}" 
+                                                           Stretch="UniformToFill"/>
 
                                                     <!-- Plan Badge -->
                                                     <Border Background="{x:Bind RequiredPlan, Converter={StaticResource PlanColorConverter}}"
