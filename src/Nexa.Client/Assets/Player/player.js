@@ -15,64 +15,90 @@ async function initPlayer(config) {
     }
 }
 
-async function init(config) {
-    // Create a Player instance.
-    const video = document.getElementById('video');
-    const player = new shaka.Player();
-    await player.attach(video);
+async function destroyPlayer() {
+    if (window.player) {
+        await window.player.destroy();
+        window.player = null;
+        console.log('Player destroyed');
+    }
+}
 
-    // Attach player to the window to make it easy to access in the JS console.
+async function init(config) {
+    // When using Shaka UI, we don't create player manually, we use the UI library.
+    const video = document.getElementById('video');
+    const ui = video['ui'];
+    const controls = ui.getControls();
+    const player = controls.getPlayer();
+
+    // Attach player to window for debugging
     window.player = player;
+    window.ui = ui;
+
+    // Handle poster
+    if (config.posterUrl) {
+        video.poster = config.posterUrl;
+    } else {
+        video.removeAttribute('poster');
+    }
+
+    // Listen for playback start
+    video.addEventListener('playing', () => {
+        console.log('Video playing, notifying host...');
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage("playbackStarted");
+        }
+    });
+
+    // Track user activity to show/hide controls (Simple & Reliable)
+    // This syncs with Shaka UI's internal mouse movement detection
+    let lastMouseMoveTime = 0;
+    document.addEventListener('mousemove', () => {
+        // Throttle messages
+        const now = Date.now();
+        if (now - lastMouseMoveTime > 200) {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage("userActive");
+            }
+            lastMouseMoveTime = now;
+        }
+    });
 
     // Listen for error events.
     player.addEventListener('error', onErrorEvent);
 
-    // Configure Clear Key DRM
-    // config.clearKeys is a map of keyId (hex) -> key (hex)
-    if (config.clearKeys) {
-        console.log('Configuring ClearKeys:', JSON.stringify(config.clearKeys));
-        player.configure({
-            drm: {
-                clearKeys: config.clearKeys
-            },
-            abr: {
-                enabled: false // Disable ABR for debugging
-            }
-        });
-    } else {
-        // Even if no keys, disable ABR for debugging
-        player.configure({
-            abr: {
-                enabled: false
-            }
-        });
-    }
+    // Configure DRM
+    player.configure({
+        drm: {
+            clearKeys: config.clearKeys
+        },
+        // Enable ABR with aggressive settings for premium feel
+        abr: {
+            enabled: true,
+            defaultBandwidthEstimate: 10_000_000, // Start high (25 Mbps)
+            switchInterval: 0, // Switch immediately when bandwidth allows
+            bandwidthUpgradeTarget: 0.8 // Upgrade when 80% of bandwidth is enough
+        },
+        streaming: {
+            bufferingGoal: 12, // Buffer more content (30s)
+            rebufferingGoal: 2 // Start playing after 2s buffered
+        }
+    });
 
-    // Configure Authorization header
-    if (config.accessToken) {
-        console.log('Access Token provided, configuring request filter...');
-        player.getNetworkingEngine().registerRequestFilter(function (type, request) {
-            // Only add header for URIs that are not license requests (license requests might need different auth or none if handled by cookies/other means, but here we likely need it for content)
-            // Actually, license requests in this system are handled via C# proxy, so Shaka only requests manifest and segments.
-            // We should add it to all requests to the content server.
-            console.log('Requesting: ' + request.uris[0]);
-            request.headers['Authorization'] = 'Bearer ' + config.accessToken;
-        });
-    } else {
-        console.warn('No Access Token provided in config!');
-        showError('No Access Token provided!');
-    }
+    // Add Authorization header
+    player.getNetworkingEngine().registerRequestFilter((type, request) => {
+        if (type === shaka.net.NetworkingEngine.RequestType.SEGMENT ||
+            type === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
+            if (config.accessToken) {
+                request.headers['Authorization'] = `Bearer ${config.accessToken}`;
+            }
+        }
+    });
 
-    // Try to load a manifest.
-    // This is an asynchronous process.
+    // Load manifest
     try {
-        console.log('Loading manifest: ' + config.manifestUrl);
         await player.load(config.manifestUrl);
-        // This runs if the asynchronous load is successful.
         console.log('The video has now been loaded!');
     } catch (e) {
-        // onError is executed if the asynchronous load fails.
-        console.error('Manifest load failed:', e);
         onError(e);
     }
 }
@@ -92,7 +118,7 @@ function showError(message) {
     const errorDisplay = document.getElementById('error-display');
     const video = document.getElementById('video');
 
-    video.style.display = 'none';
+    // Hide video container if possible, or just overlay error
     errorDisplay.style.display = 'block';
     errorDisplay.textContent = message;
 }

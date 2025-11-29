@@ -19,6 +19,7 @@ public sealed partial class PlayerPage : Page
     private readonly DrmService _drmService;
     private string _contentId = string.Empty;
     private string _manifestUrl = string.Empty;
+    private string _thumbnailUrl = string.Empty;
 
     public PlayerPage()
     {
@@ -35,6 +36,7 @@ public sealed partial class PlayerPage : Page
         if (e.Parameter is ContentMetadata metadata)
         {
             _contentId = metadata.ContentId;
+            _thumbnailUrl = metadata.ThumbnailUrl;
             // Assuming manifest URL is relative, construct full URL. 
             // In real app, BaseAddress should be configured.
             // For now assuming localhost or whatever the client is configured for.
@@ -65,6 +67,17 @@ public sealed partial class PlayerPage : Page
     protected override async void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        
+        // Stop playback and destroy player
+        try 
+        {
+            await PlayerWebView.ExecuteScriptAsync("destroyPlayer();");
+        }
+        catch { /* Ignore if WebView is already gone */ }
+
+        // Navigate to blank to ensure media resources are released
+        PlayerWebView.Source = new Uri("about:blank");
+
         if (!string.IsNullOrEmpty(_contentId))
         {
             await _drmService.StopHeartbeatAsync(_contentId);
@@ -85,9 +98,14 @@ public sealed partial class PlayerPage : Page
             var tokenManager = (Application.Current as App)!.Services.GetService(typeof(Nexa.Client.Services.Auth.ITokenManager)) as Nexa.Client.Services.Auth.ITokenManager;
             var accessToken = tokenManager?.GetAccessToken() ?? string.Empty;
 
+            // Construct full thumbnail URL
+            string baseUrl = Nexa.Client.Configuration.AppConfig.BaseApiUrl.TrimEnd('/');
+            string thumbnailUrl = !string.IsNullOrEmpty(_thumbnailUrl) ? $"{baseUrl}{_thumbnailUrl}" : "";
+
             var config = new
             {
                 manifestUrl = _manifestUrl,
+                posterUrl = thumbnailUrl,
                 clearKeys = licenses.ToDictionary(l => l.KeyId, l => l.EncryptedKey), // EncryptedKey is now ClearKey (hex)
                 accessToken = accessToken
             };
@@ -95,31 +113,117 @@ public sealed partial class PlayerPage : Page
             var jsonConfig = JsonSerializer.Serialize(config);
 
             // 4. Load HTML
-            // We need to map the Assets folder to a virtual host or load string.
-            // SetVirtualHostNameToFolderMapping is cleaner.
+            // 4. Load HTML
+            // Initialize WebView2 with options to allow mixed content and disable web security (for dev)
+            // Workaround for CreateAsync signature mismatch: set env var
+            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--allow-running-insecure-content --disable-web-security");
             
             await PlayerWebView.EnsureCoreWebView2Async();
+
             PlayerWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "nexa.player", 
                 Path.Combine(Windows.ApplicationModel.Package.Current.InstalledLocation.Path, "Assets", "Player"), 
                 CoreWebView2HostResourceAccessKind.Allow);
+
+            // Listen for messages from JS
+            PlayerWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+            
+            // Listen for Fullscreen changes
+            PlayerWebView.CoreWebView2.ContainsFullScreenElementChanged += CoreWebView2_ContainsFullScreenElementChanged;
 
             PlayerWebView.Source = new Uri("https://nexa.player/player.html");
 
             // 5. Pass config to JS when ready
             // We'll do this in NavigationCompleted
             PlayerWebView.Tag = jsonConfig; // Store config temporarily
+            
+            // Start auto-hide timer
+            StartAutoHideTimer();
         }
         catch (Exception ex)
         {
             LoadingRing.IsActive = false;
+            LoadingOverlay.Visibility = Visibility.Collapsed;
             ShowError($"Failed to load player: {ex.Message}");
         }
     }
 
+    private DispatcherTimer? _autoHideTimer;
+    private bool _isControlsVisible = true;
+
+    private void StartAutoHideTimer()
+    {
+        _autoHideTimer = new DispatcherTimer();
+        _autoHideTimer.Interval = TimeSpan.FromSeconds(3.2); // Increased to match Shaka's fade out better
+        _autoHideTimer.Tick += (s, e) =>
+        {
+            HideControls();
+            _autoHideTimer.Stop();
+        };
+        _autoHideTimer.Start();
+    }
+
+    private void ShowControls()
+    {
+        if (!_isControlsVisible)
+        {
+            _isControlsVisible = true;
+            ShowControlsStoryboard.Begin();
+        }
+        _autoHideTimer?.Stop();
+        _autoHideTimer?.Start();
+    }
+
+    private void HideControls()
+    {
+        if (_isControlsVisible)
+        {
+            _isControlsVisible = false;
+            HideControlsStoryboard.Begin();
+        }
+    }
+
+    private void CoreWebView2_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        var message = args.TryGetWebMessageAsString();
+        if (message == "playbackStarted")
+        {
+            // Hide loading overlay when video actually starts playing
+            LoadingRing.IsActive = false;
+            LoadingOverlay.Visibility = Visibility.Collapsed;
+        }
+        else if (message == "userActive")
+        {
+            ShowControls();
+        }
+    }
+
+    private void CoreWebView2_ContainsFullScreenElementChanged(CoreWebView2 sender, object args)
+    {
+        var appWindow = GetAppWindowForCurrentWindow();
+        if (sender.ContainsFullScreenElement)
+        {
+            appWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+            // We want our custom controls to be visible in fullscreen too, controlled by JS events.
+            // ControlsGrid.Visibility = Visibility.Collapsed; // REMOVED
+        }
+        else
+        {
+            appWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+            ControlsGrid.Visibility = Visibility.Visible;
+        }
+    }
+
+    private Microsoft.UI.Windowing.AppWindow GetAppWindowForCurrentWindow()
+    {
+        var hWnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+        var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
+        return Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+    }
+
     private async void PlayerWebView_NavigationCompleted(WebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
     {
-        LoadingRing.IsActive = false;
+        // Don't hide loading ring here yet, wait for playbackStarted
         if (args.IsSuccess && sender.Tag is string jsonConfig)
         {
             // Execute JS to init player

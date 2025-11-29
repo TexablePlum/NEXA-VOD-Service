@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="utf-8">
     <title>NEXA Player</title>
-    <!-- Load Shaka Player from CDN for now, or local if available -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.0/shaka-player.compiled.js"></script>
+    <!-- Load Shaka Player UI from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.16.10/dist/shaka-player.ui.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/shaka-player@4.16.10/dist/controls.css">
     <style>
         body {
             margin: 0;
@@ -18,10 +20,18 @@
             align-items: center;
             height: 100vh;
         }
+
+        /* Ensure the UI container fills the screen */
+        .shaka-video-container {
+            width: 100%;
+            height: 100%;
+        }
+
         video {
             width: 100%;
             height: 100%;
         }
+
         #error-display {
             display: none;
             color: #ff4444;
@@ -30,14 +40,16 @@
         }
     </style>
 </head>
+
 <body>
-    <video id="video"
-           width="640"
-           poster="//shaka-player-demo.appspot.com/assets/poster.jpg"
-           controls autoplay></video>
-    
+    <!-- Shaka UI expects a container -->
+    <div data-shaka-player-container style="width:100%;height:100%">
+        <video data-shaka-player id="video" style="width:100%;height:100%" autoplay></video>
+    </div>
+
     <div id="error-display"></div>
 
     <script src="player.js"></script>
 </body>
+
 </html>

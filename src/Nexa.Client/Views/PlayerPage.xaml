@@ -6,23 +6,93 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    Background="Black">
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
+    <Page.Resources>
+        <Style x:Key="SubtlerButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#33FFFFFF"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="CornerRadius" Value="20"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="#55FFFFFF" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="Background">
+                                                <DiscreteObjectKeyFrame KeyTime="0" Value="#77FFFFFF" />
+                                            </ObjectAnimationUsingKeyFrames>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter x:Name="ContentPresenter"
+                                              Content="{TemplateBinding Content}"
+                                              ContentTransitions="{TemplateBinding ContentTransitions}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Padding="{TemplateBinding Padding}"
+                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              AutomationProperties.AccessibilityView="Raw" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
 
-        <CommandBar DefaultLabelPosition="Right">
-            <AppBarButton Icon="Back" Label="Back" Click="BackButton_Click"/>
-            <AppBarElementContainer>
-                <TextBlock x:Name="TitleTextBlock" Text="Player" VerticalAlignment="Center" Margin="12,0,0,0" Style="{StaticResource SubtitleTextBlockStyle}"/>
-            </AppBarElementContainer>
-        </CommandBar>
+    <Grid Background="Black">
+        <!-- WebView2 Hosting Shaka Player -->
+        <WebView2 x:Name="PlayerWebView" 
+                  HorizontalAlignment="Stretch" 
+                  VerticalAlignment="Stretch"/>
 
-        <WebView2 x:Name="PlayerWebView" Grid.Row="1"/>
-        
-        <ProgressRing x:Name="LoadingRing" Grid.Row="1" IsActive="True" Width="60" Height="60" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        <!-- Custom Title Bar / Overlay Controls -->
+        <Grid x:Name="ControlsGrid" VerticalAlignment="Top" Height="100" Background="#99000000" Opacity="1" Padding="0,32,0,0">
+            <Grid.Resources>
+                <Storyboard x:Name="HideControlsStoryboard">
+                    <DoubleAnimation Storyboard.TargetName="ControlsGrid" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3"/>
+                </Storyboard>
+                <Storyboard x:Name="ShowControlsStoryboard">
+                    <DoubleAnimation Storyboard.TargetName="ControlsGrid" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
+                </Storyboard>
+            </Grid.Resources>
+            <StackPanel Orientation="Horizontal" Margin="24,0,0,0" VerticalAlignment="Center" Spacing="16">
+                <Button x:Name="BackButton" 
+                        Click="BackButton_Click"
+                        Style="{StaticResource SubtlerButtonStyle}"
+                        Width="40" Height="40" CornerRadius="20"
+                        Background="Transparent" BorderThickness="0">
+                    <FontIcon Glyph="&#xE72B;" FontSize="16" Foreground="White"/>
+                </Button>
+                <TextBlock x:Name="TitleTextBlock" 
+                           Text="Movie Title" 
+                           Style="{StaticResource TitleTextBlockStyle}" 
+                           Foreground="White" 
+                           VerticalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Loading Overlay -->
+        <Grid x:Name="LoadingOverlay" Background="Black" Visibility="Visible">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="20">
+                <ProgressRing x:Name="LoadingRing" IsActive="True" Width="60" Height="60" Foreground="{StaticResource AccentFillColorDefaultBrush}"/>
+                <TextBlock Text="Wczytywanie..." Foreground="#AAFFFFFF" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
     </Grid>
 </Page>

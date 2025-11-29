@@ -37,7 +37,7 @@ namespace Nexa.Client
     {
         public new static App Current => (App)Application.Current;
         public IServiceProvider Services { get; }
-        private Window? _window;
+        public static Window? MainWindow { get; private set; }
 
         public App()
         {
@@ -106,8 +106,8 @@ namespace Nexa.Client
 
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
-            _window = new MainWindow();
-            _window.Activate();
+            MainWindow = new MainWindow();
+            MainWindow.Activate();
         }
     }
 }
