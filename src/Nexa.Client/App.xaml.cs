@@ -11,6 +11,7 @@ using Nexa.Client.Configuration;
 using Nexa.Client.Services.Auth;
 using Nexa.Client.Services.Catalog;
 using Nexa.Client.Services.Device;
+using Nexa.Client.Services.Drm;
 using Nexa.Client.Services.Infrastructure;
 using Nexa.Client.Services.Notifications;
 using Nexa.Client.ViewModels;
@@ -98,6 +99,7 @@ namespace Nexa.Client
 
             // Device Registration
             services.AddSingleton<IDeviceRegistrationService, DeviceRegistrationService>();
+            services.AddSingleton<DrmService>();
 
             return services.BuildServiceProvider();
         }

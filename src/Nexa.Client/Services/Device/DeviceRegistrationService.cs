@@ -134,6 +134,43 @@ public class DeviceRegistrationService : IDeviceRegistrationService
         localSettings.Values[DeviceIdKey] = deviceId;
     }
 
+    public byte[] DecryptData(byte[] encryptedData)
+    {
+        // Try TPM first
+        try
+        {
+            var provider = CngProvider.MicrosoftPlatformCryptoProvider;
+            if (CngKey.Exists(TpmKeyName, provider))
+            {
+                using var cngKey = CngKey.Open(TpmKeyName, provider);
+                using var rsa = new RSACng(cngKey);
+                return rsa.Decrypt(encryptedData, RSAEncryptionPadding.OaepSHA256);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"TPM decryption failed: {ex.Message}. Trying software key.");
+        }
+
+        // Fallback to Software
+        try
+        {
+            var vault = new PasswordVault();
+            var credential = vault.Retrieve(SoftwareKeyResource, SoftwareKeyUserName);
+            credential.RetrievePassword();
+
+            var privateKeyBytes = Convert.FromBase64String(credential.Password);
+            using var rsa = RSA.Create();
+            rsa.ImportPkcs8PrivateKey(privateKeyBytes, out _);
+            
+            return rsa.Decrypt(encryptedData, RSAEncryptionPadding.OaepSHA256);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("Failed to decrypt data. No valid key found.", ex);
+        }
+    }
+
     private (string PublicKeyPem, string? Attestation) GenerateTpmKey()
     {
         // Check if Platform Crypto Provider is available
@@ -151,7 +188,7 @@ public class DeviceRegistrationService : IDeviceRegistrationService
             var keyParams = new CngKeyCreationParameters
             {
                 Provider = provider,
-                KeyUsage = CngKeyUsages.Signing,
+                KeyUsage = CngKeyUsages.Signing | CngKeyUsages.Decryption, // Added Decryption usage
                 ExportPolicy = CngExportPolicies.None // Private key never leaves TPM
             };
             cngKey = CngKey.Create(CngAlgorithm.Rsa, TpmKeyName, keyParams);

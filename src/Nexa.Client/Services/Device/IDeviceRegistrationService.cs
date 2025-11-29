@@ -6,4 +6,5 @@ public interface IDeviceRegistrationService
 {
     Task<bool> IsDeviceRegisteredAsync();
     Task EnsureDeviceRegisteredAsync(string userId);
+    byte[] DecryptData(byte[] encryptedData);
 }

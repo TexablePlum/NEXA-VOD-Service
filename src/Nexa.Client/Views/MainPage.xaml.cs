@@ -72,7 +72,7 @@ public sealed partial class MainPage : Page
     {
         if (e.ClickedItem is ContentMetadata movie)
         {
-            ViewModel.SelectMovieCommand.Execute(movie);
+            Frame.Navigate(typeof(PlayerPage), movie);
         }
     }
 
