@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nexa.Client.Services.Auth;
+using Nexa.Client.Services.Device;
 using Nexa.Client.Services.Exceptions;
 using Nexa.Client.Services.Notifications;
 using Nexa.Shared.Models;
@@ -16,6 +17,7 @@ namespace Nexa.Client.ViewModels;
 public partial class AuthViewModel : ObservableObject
 {
     private readonly IAuthService _authService;
+    private readonly IDeviceRegistrationService _deviceRegistrationService;
     private readonly INotificationService _notifications;
 
     // ==================== Properties ====================
@@ -134,9 +136,10 @@ public partial class AuthViewModel : ObservableObject
 
     // ==================== Constructor ====================
 
-    public AuthViewModel(IAuthService authService, INotificationService notifications)
+    public AuthViewModel(IAuthService authService, IDeviceRegistrationService deviceRegistrationService, INotificationService notifications)
     {
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
+        _deviceRegistrationService = deviceRegistrationService ?? throw new ArgumentNullException(nameof(deviceRegistrationService));
         _notifications = notifications ?? throw new ArgumentNullException(nameof(notifications));
     }
 
@@ -155,6 +158,9 @@ public partial class AuthViewModel : ObservableObject
             var response = await _authService.LoginAsync(Email, Password, RememberMe);
 
             _notifications.ShowSuccess($"Witaj, {response.User.Email}!", "Zalogowano pomyślnie");
+
+            // Rejestracja urządzenia (jeśli wymagana)
+            await _deviceRegistrationService.EnsureDeviceRegisteredAsync(response.User.UserId);
 
             // Wyczyść hasło ze względów bezpieczeństwa
             Password = string.Empty;
@@ -189,6 +195,9 @@ public partial class AuthViewModel : ObservableObject
             var response = await _authService.RegisterAsync(Email, Password, plan: SelectedPlan, rememberMe: RememberMe);
 
             _notifications.ShowSuccess($"Witaj w NEXA, {response.User.Email}!", "Rejestracja pomyślna");
+
+            // Rejestracja urządzenia (jeśli wymagana)
+            await _deviceRegistrationService.EnsureDeviceRegisteredAsync(response.User.UserId);
 
             // Wyczyść hasła ze względów bezpieczeństwa
             Password = string.Empty;

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Nexa.Client.Services.Auth;
+using Nexa.Client.Services.Device;
 using Nexa.Client.Services.Infrastructure;
 using Nexa.Client.Services.Notifications;
 using Nexa.Shared.Models;
@@ -15,6 +16,7 @@ namespace Nexa.Client.ViewModels
         private readonly INotificationService _notifications;
         private readonly ITokenManager _tokenManager;
         private readonly IAuthService _authService;
+        private readonly IDeviceRegistrationService _deviceRegistrationService;
 
         private string _loadingText = "Inicjalizacja...";
         public string LoadingText
@@ -47,12 +49,14 @@ namespace Nexa.Client.ViewModels
             ISystemHealthService healthService,
             INotificationService notifications,
             ITokenManager tokenManager,
-            IAuthService authService)
+            IAuthService authService,
+            IDeviceRegistrationService deviceRegistrationService)
         {
             _healthService = healthService;
             _notifications = notifications;
             _tokenManager = tokenManager;
             _authService = authService;
+            _deviceRegistrationService = deviceRegistrationService;
 
             // Startuje proces od razu po utworzeniu VM
             _ = InitializeAsync();
@@ -121,6 +125,9 @@ namespace Nexa.Client.ViewModels
             {
                 // Spróbuj odświeżyć token z zapisanego RefreshToken
                 var response = await _authService.RefreshTokenAsync();
+
+                // Rejestracja urządzenia (jeśli wymagana)
+                await _deviceRegistrationService.EnsureDeviceRegisteredAsync(response.User.UserId);
 
                 // Sukces - wywołaj event AutoLoginSucceeded
                 AutoLoginSucceeded?.Invoke(this, response.User);

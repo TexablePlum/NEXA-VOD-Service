@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Shapes;
 using Nexa.Client.Configuration;
 using Nexa.Client.Services.Auth;
 using Nexa.Client.Services.Catalog;
+using Nexa.Client.Services.Device;
 using Nexa.Client.Services.Infrastructure;
 using Nexa.Client.Services.Notifications;
 using Nexa.Client.ViewModels;
@@ -94,6 +95,9 @@ namespace Nexa.Client
                 var httpClient = httpClientFactory.CreateClient("NexaGateway");
                 return new CatalogService(httpClient, AppConfig.BaseApiUrl);
             });
+
+            // Device Registration
+            services.AddSingleton<IDeviceRegistrationService, DeviceRegistrationService>();
 
             return services.BuildServiceProvider();
         }
