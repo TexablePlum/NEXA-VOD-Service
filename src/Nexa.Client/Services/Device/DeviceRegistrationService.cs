@@ -89,7 +89,6 @@ public class DeviceRegistrationService : IDeviceRegistrationService
 
         // Proceed to register (overwrite local ID if successful)
 
-        string deviceId = $"device-{Guid.NewGuid()}";
         string publicKeyPem;
         string? tpmAttestation = null;
         string deviceName = Environment.MachineName;
@@ -107,6 +106,10 @@ public class DeviceRegistrationService : IDeviceRegistrationService
             publicKeyPem = GenerateSoftwareKey();
             //deviceName += " (Software)";
         }
+
+        // Generate deterministic DeviceId from public key hash
+        // This ensures the same key always produces the same DeviceId
+        string deviceId = GenerateDeviceIdFromPublicKey(publicKeyPem);
 
         var request = new DeviceRegistrationRequest
         {
@@ -252,6 +255,33 @@ public class DeviceRegistrationService : IDeviceRegistrationService
         vault.Add(credential);
 
         return publicKeyPem;
+    }
+
+    /// <summary>
+    /// Generates a deterministic DeviceId from the public key hash.
+    /// Same public key always produces the same DeviceId.
+    /// </summary>
+    private static string GenerateDeviceIdFromPublicKey(string publicKeyPem)
+    {
+        // Remove PEM headers/footers and whitespace to get just the base64 content
+        var keyContent = publicKeyPem
+            .Replace("-----BEGIN PUBLIC KEY-----", "")
+            .Replace("-----END PUBLIC KEY-----", "")
+            .Replace("\r", "")
+            .Replace("\n", "")
+            .Trim();
+
+        // Hash the public key content
+        using var sha256 = SHA256.Create();
+        var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(keyContent));
+
+        // Take first 16 bytes (128 bits) and format as GUID-like string
+        // This gives us a stable, unique identifier per key
+        var guidBytes = new byte[16];
+        Array.Copy(hashBytes, guidBytes, 16);
+        var guid = new Guid(guidBytes);
+
+        return $"device-{guid}";
     }
 
     private static string ConvertToPem(byte[] data, string label)

@@ -42,6 +42,12 @@ namespace Nexa.Client
         public App()
         {
             this.InitializeComponent();
+            
+            // Configure WebView2 browser arguments BEFORE any WebView2 instances are created
+            // This must be set early as it only affects NEW WebView2 runtime processes
+            Environment.SetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", 
+                "--allow-running-insecure-content --disable-web-security");
+            
             Services = ConfigureServices();
         }
 

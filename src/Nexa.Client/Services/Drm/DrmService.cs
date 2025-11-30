@@ -47,7 +47,13 @@ public class DrmService
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
         var response = await _httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        
+        // Use ClientErrorHandler for better error messages
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorHandler = new ErrorHandling.ClientErrorHandler();
+            await errorHandler.ThrowIfErrorAsync(response);
+        }
 
         var licenseResponse = await response.Content.ReadFromJsonAsync<MultiQualityLicenseResponse>();
         
