@@ -70,6 +70,17 @@ async function initShaka(config) {
 
         // Create UI overlay explicitly (fixes race condition)
         const ui = new shaka.ui.Overlay(player, videoContainer, video);
+
+        // Configure UI to remove Picture-in-Picture and fix layout
+        const uiConfig = {
+            'controlPanelElements': ['play_pause', 'mute', 'volume', 'time_and_duration', 'spacer', 'overflow_menu', 'fullscreen'],
+            'overflowMenuButtons': ['captions', 'quality', 'language', 'playback_rate'] // Removed 'picture_in_picture' and 'cast'
+        };
+        ui.configure(uiConfig);
+
+        // Disable PiP on video element as well
+        video.disablePictureInPicture = true;
+
         const controls = ui.getControls();
 
         // Attach to window for debugging
@@ -78,6 +89,9 @@ async function initShaka(config) {
         window.controls = controls;
 
         console.log('initShaka: Shaka Player and UI initialized successfully');
+
+        // Setup global keyboard shortcuts
+        setupKeyboardShortcuts(player, video, ui);
 
         // Initialization Watchdog
         // If playback doesn't start within 15 seconds, report error
@@ -191,7 +205,118 @@ function onError(error) {
     showError(`Error code: ${error.code} - ${error.message}`);
 }
 
+function setupKeyboardShortcuts(player, video, ui) {
+    console.log('Setting up global keyboard shortcuts (only for non-fullscreen mode)...');
+
+    // Track if user is typing in an input field (shouldn't happen in player, but good practice)
+    const isTyping = () => {
+        const activeElement = document.activeElement;
+        return activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            activeElement.isContentEditable
+        );
+    };
+
+    document.addEventListener('keydown', (event) => {
+        // Don't handle shortcuts if user is typing
+        if (isTyping()) return;
+
+        // IMPORTANT: Only handle keyboard shortcuts when NOT in fullscreen
+        // In fullscreen, let Shaka Player's built-in keyboard handling work
+        if (document.fullscreenElement) {
+            return; // Exit early - we're in fullscreen, let Shaka handle it
+        }
+
+        const key = event.key.toLowerCase();
+
+        // Prevent default behavior for handled keys (only when not in fullscreen)
+        const handledKeys = [' ', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'f', 'm'];
+        if (handledKeys.includes(key)) {
+            event.preventDefault();
+        }
+
+        switch (key) {
+            case ' ': // Space - Play/Pause
+                if (video.paused) {
+                    video.play();
+                } else {
+                    video.pause();
+                }
+                break;
+
+            case 'arrowleft': // Left Arrow - Rewind 10 seconds
+                video.currentTime = Math.max(0, video.currentTime - 10);
+                break;
+
+            case 'arrowright': // Right Arrow - Forward 10 seconds
+                video.currentTime = Math.min(video.duration, video.currentTime + 10);
+                break;
+
+            case 'arrowup': // Up Arrow - Volume up
+                video.volume = Math.min(1, video.volume + 0.1);
+                break;
+
+            case 'arrowdown': // Down Arrow - Volume down
+                video.volume = Math.max(0, video.volume - 0.1);
+                break;
+
+            case 'f': // F - Toggle fullscreen
+                toggleFullscreen(video);
+                break;
+
+            case 'm': // M - Toggle mute
+                video.muted = !video.muted;
+                break;
+        }
+    });
+
+    // Separate listener for number keys (0-9) - works in BOTH fullscreen and non-fullscreen
+    // This is a custom feature not provided by Shaka Player, so it's safe to always handle
+    document.addEventListener('keydown', (event) => {
+        if (isTyping()) return;
+
+        const key = event.key;
+
+        // Handle number keys 0-9
+        if (key >= '0' && key <= '9') {
+            event.preventDefault();
+            const percentage = parseInt(key) / 10;
+            if (!isNaN(percentage) && video.duration) {
+                video.currentTime = video.duration * percentage;
+            }
+        }
+    });
+
+    console.log('Global keyboard shortcuts registered (active only when not in fullscreen)');
+}
+
+function toggleFullscreen(video) {
+    const container = document.querySelector('[data-shaka-player-container]');
+
+    if (!document.fullscreenElement) {
+        // Enter fullscreen
+        if (container.requestFullscreen) {
+            container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) {
+            container.webkitRequestFullscreen();
+        } else if (container.msRequestFullscreen) {
+            container.msRequestFullscreen();
+        }
+    } else {
+        // Exit fullscreen
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+            document.msExitFullscreen();
+        }
+    }
+}
+
 function showError(message) {
+
     const errorDisplay = document.getElementById('error-display');
     const video = document.getElementById('video');
 

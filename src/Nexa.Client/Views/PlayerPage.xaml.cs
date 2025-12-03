@@ -16,6 +16,7 @@ namespace Nexa.Client.Views;
 public sealed partial class PlayerPage : Page
 {
     private readonly DrmService _drmService;
+    private readonly Services.Auth.IAuthService _authService;
     private readonly Services.Notifications.INotificationService _notificationService;
     private string _contentId = string.Empty;
     private string _manifestUrl = string.Empty;
@@ -27,6 +28,7 @@ public sealed partial class PlayerPage : Page
         this.InitializeComponent();
         var app = Application.Current as App;
         _drmService = app!.Services.GetService(typeof(DrmService)) as DrmService ?? throw new InvalidOperationException("DrmService not found");
+        _authService = app!.Services.GetService(typeof(Services.Auth.IAuthService)) as Services.Auth.IAuthService ?? throw new InvalidOperationException("AuthService not found");
         _notificationService = app!.Services.GetService(typeof(Services.Notifications.INotificationService)) as Services.Notifications.INotificationService ?? throw new InvalidOperationException("NotificationService not found");
         
         PlayerWebView.NavigationCompleted += PlayerWebView_NavigationCompleted;
@@ -155,9 +157,13 @@ public sealed partial class PlayerPage : Page
             // 2. Start Heartbeat
             _drmService.StartHeartbeat(_contentId);
 
-            // 3. Prepare Player Config
-            var tokenManager = (Application.Current as App)!.Services.GetService(typeof(Nexa.Client.Services.Auth.ITokenManager)) as Nexa.Client.Services.Auth.ITokenManager;
-            var accessToken = tokenManager?.GetAccessToken() ?? string.Empty;
+            // 3. Prepare Player Config - Get valid access token (auto-refreshes if expired)
+            var accessToken = await _authService.GetValidAccessTokenAsync();
+            
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                throw new InvalidOperationException("No access token available. User must log in again.");
+            }
 
             // Construct full thumbnail URL
             string baseUrl = Nexa.Client.Configuration.AppConfig.BaseApiUrl.TrimEnd('/');
@@ -168,8 +174,8 @@ public sealed partial class PlayerPage : Page
                 manifestUrl = _manifestUrl,
                 posterUrl = thumbnailUrl,
                 clearKeys = licenses.ToDictionary(l => l.KeyId, l => l.EncryptedKey),
-                accessToken = accessToken,
-                maxHeight = maxHeight // Pass max height to JS
+                accessToken,
+                maxHeight // Pass max height to JS
             };
 
             var jsonConfig = JsonSerializer.Serialize(config);
@@ -186,6 +192,11 @@ public sealed partial class PlayerPage : Page
                     "nexa.player", 
                     Path.Combine(Windows.ApplicationModel.Package.Current.InstalledLocation.Path, "Assets", "Player"), 
                     CoreWebView2HostResourceAccessKind.Allow);
+
+                // Security, disabled all browser actions.
+                PlayerWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                PlayerWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                PlayerWebView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
 
                 // Listen for messages from JS
                 PlayerWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
