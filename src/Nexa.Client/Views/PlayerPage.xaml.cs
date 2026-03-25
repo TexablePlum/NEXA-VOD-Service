@@ -126,7 +126,10 @@ public sealed partial class PlayerPage : Page
             if (PlayerWebView.CoreWebView2 == null)
             {
                 System.Diagnostics.Debug.WriteLine("PlayerPage: CoreWebView2 is null, initializing...");
-                await PlayerWebView.EnsureCoreWebView2Async();
+                var envOptions = new CoreWebView2EnvironmentOptions();
+                envOptions.AdditionalBrowserArguments = "--allow-running-insecure-content --autoplay-policy=no-user-gesture-required";
+                var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, null, envOptions);
+                await PlayerWebView.EnsureCoreWebView2Async(env);
             }
 
             if (_isPageUnloaded) return; // Abort if page was closed during async call
