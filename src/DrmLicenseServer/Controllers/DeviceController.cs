@@ -26,6 +26,23 @@ public class DeviceController : BaseAuthenticatedController
     }
 
     /// <summary>
+    /// Pobiera wyzwanie (Nonce) dla urządzenia, wymagane do kryptograficznej weryfikacji.
+    /// </summary>
+    [HttpGet("challenge")]
+    [ProducesResponseType(typeof(DeviceChallengeResponse), 200)]
+    public async Task<ActionResult<DeviceChallengeResponse>> GetChallenge(
+        [FromQuery] string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            return BadRequest(new ErrorResponse { Message = "Device ID is required." });
+        }
+
+        var response = await _deviceKeyService.GenerateChallengeAsync(deviceId);
+        return Ok(response);
+    }
+
+    /// <summary>
     /// Rejestruje nowe urządzenie z public keyem.
     /// </summary>
     [HttpPost("register")]
@@ -43,8 +60,9 @@ public class DeviceController : BaseAuthenticatedController
             userId,
             request.DeviceId,
             request.PublicKeyPem,
+            request.Nonce,
+            request.SignatureBase64,
             request.DeviceName,
-            request.TpmAttestation,
             ct);
 
         return Ok(new DeviceInfo
@@ -54,7 +72,7 @@ public class DeviceController : BaseAuthenticatedController
             RegisteredAt = device.RegisteredAt,
             LastUsedAt = device.LastUsedAt,
             IsActive = device.IsActive,
-            HasTpmAttestation = !string.IsNullOrEmpty(device.TpmAttestation)
+            IsCryptographicallyVerified = !string.IsNullOrEmpty(device.TpmAttestation) // Reused column holds signature
         });
     }
 
@@ -76,7 +94,7 @@ public class DeviceController : BaseAuthenticatedController
             RegisteredAt = d.RegisteredAt,
             LastUsedAt = d.LastUsedAt,
             IsActive = d.IsActive,
-            HasTpmAttestation = !string.IsNullOrEmpty(d.TpmAttestation)
+            IsCryptographicallyVerified = !string.IsNullOrEmpty(d.TpmAttestation) // Reused column holds signature
         }).ToList());
     }
 

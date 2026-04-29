@@ -393,7 +393,7 @@
 
             <!-- Wersja (dół strony) -->
             <TextBlock Grid.Row="2"
-                       Text="v1.0.0 Alpha"
+                       Text="v1.0.0"
                        HorizontalAlignment="Center"
                        VerticalAlignment="Bottom"
                        Margin="0,0,0,30"

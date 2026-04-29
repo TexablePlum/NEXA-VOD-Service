@@ -111,20 +111,34 @@ public class DeviceRegistrationService : IDeviceRegistrationService
         // This ensures the same key always produces the same DeviceId
         string deviceId = GenerateDeviceIdFromPublicKey(publicKeyPem);
 
-        var request = new DeviceRegistrationRequest
-        {
-            DeviceId = deviceId,
-            DeviceName = deviceName,
-            PublicKeyPem = publicKeyPem,
-            TpmAttestation = tpmAttestation
-        };
-
         var token = _tokenManager.GetAccessToken();
         if (string.IsNullOrEmpty(token))
         {
             throw new InvalidOperationException("Cannot register device without access token.");
         }
 
+        // --- 1. Get Challenge Nonce from server ---
+        var challengeReq = new HttpRequestMessage(HttpMethod.Get, $"/api/Device/challenge?deviceId={deviceId}");
+        challengeReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        var challengeResp = await _httpClient.SendAsync(challengeReq);
+        challengeResp.EnsureSuccessStatusCode();
+        
+        var challenge = await challengeResp.Content.ReadFromJsonAsync<DeviceChallengeResponse>();
+        string nonce = challenge?.Nonce ?? throw new InvalidOperationException("No nonce received from server");
+
+        // --- 2. Sign Challenge ---
+        string signatureBase64 = SignChallenge(deviceId, nonce);
+
+        var request = new DeviceRegistrationRequest
+        {
+            DeviceId = deviceId,
+            DeviceName = deviceName,
+            PublicKeyPem = publicKeyPem,
+            Nonce = nonce,
+            SignatureBase64 = signatureBase64
+        };
+
+        // --- 3. Register Device ---
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/Device/register")
         {
             Content = JsonContent.Create(request)
@@ -171,6 +185,48 @@ public class DeviceRegistrationService : IDeviceRegistrationService
         catch (Exception ex)
         {
             throw new InvalidOperationException("Failed to decrypt data. No valid key found.", ex);
+        }
+    }
+
+    private string SignChallenge(string deviceId, string nonce)
+    {
+        var payload = $"{deviceId}|{nonce}";
+        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+
+        // Try TPM Key first
+        try
+        {
+            var provider = CngProvider.MicrosoftPlatformCryptoProvider;
+            if (CngKey.Exists(TpmKeyName, provider))
+            {
+                using var cngKey = CngKey.Open(TpmKeyName, provider);
+                using var rsa = new RSACng(cngKey);
+                var signature = rsa.SignData(payloadBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                return Convert.ToBase64String(signature);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"TPM signing failed: {ex.Message}. Trying software key.");
+        }
+
+        // Fallback to Software Key
+        try
+        {
+            var vault = new PasswordVault();
+            var credential = vault.Retrieve(SoftwareKeyResource, SoftwareKeyUserName);
+            credential.RetrievePassword();
+
+            var privateKeyBytes = Convert.FromBase64String(credential.Password);
+            using var rsa = RSA.Create();
+            rsa.ImportPkcs8PrivateKey(privateKeyBytes, out _);
+            
+            var signature = rsa.SignData(payloadBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            return Convert.ToBase64String(signature);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("Failed to sign challenge. No valid key found.", ex);
         }
     }
 

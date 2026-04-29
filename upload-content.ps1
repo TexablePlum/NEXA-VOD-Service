@@ -66,7 +66,7 @@ param(
     [string]$Codec = 'h264_nvenc',
 
     [Parameter()]
-    [string]$DrmServerUrl = "http://localhost/api/admin/cek/import",
+    [string]$DrmServerUrl = "https://localhost/api/admin/cek/import",
 
     [Parameter()]
     [string]$ContentServerContainer = "nexa-content-server"
@@ -235,6 +235,18 @@ if (-not [string]::IsNullOrEmpty($ReleaseDate)) {
     Write-Info "Data wydania: $ReleaseDate"
 }
 Write-Host ""
+
+# Try load variables from .env file
+if (Test-Path ".env") {
+    Write-Info "Wczytywanie zmiennych z pliku .env..."
+    Get-Content ".env" | Where-Object { $_ -match '^\s*([a-zA-Z0-9_]+)\s*=\s*(.*)$' } | ForEach-Object {
+        $name = $matches[1]
+        $value = $matches[2].Trim()
+        if ($value -match '^"(.*)"$') { $value = $matches[1] }
+        elseif ($value -match "^'(.*)'$") { $value = $matches[1] }
+        Set-Item -Path "env:$name" -Value $value
+    }
+}
 
 # ========================================
 # STEP 1/7: Generate Admin Token

@@ -1,552 +1,363 @@
+<div align="center">
 
-# Dokumentacja modułów NEXA VOD
+# NEXA
 
-## Spis treści
+**Video-on-Demand platform with a custom DRM system**
 
-1. [Content Server](#1-content-server)
-2. [Skrypt prepare-content.ps1](#2-skrypt-prepare-contentps1)
-3. [Biblioteka Shared](#3-biblioteka-shared)
+![.NET 9.0](https://img.shields.io/badge/.NET-9.0-512BD4?style=flat-square&logo=dotnet&logoColor=white)
+![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-9.0-512BD4?style=flat-square&logo=dotnet&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?style=flat-square&logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat-square&logo=redis&logoColor=white)
+![Nginx](https://img.shields.io/badge/Nginx-1.27-009639?style=flat-square&logo=nginx&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
 
----
+![WinUI 3](https://img.shields.io/badge/WinUI_3-Desktop-0078D4?style=flat-square&logo=windows&logoColor=white)
+![WebView2](https://img.shields.io/badge/WebView2-Chromium-0078D4?style=flat-square&logo=microsoftedge&logoColor=white)
+![Shaka Player](https://img.shields.io/badge/Shaka_Player-4.16-FF6D00?style=flat-square)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-Transcoding-007808?style=flat-square&logo=ffmpeg&logoColor=white)
+![MPEG-DASH](https://img.shields.io/badge/MPEG--DASH-Streaming-555555?style=flat-square)
+![AES-256-GCM](https://img.shields.io/badge/AES--256--GCM-Encryption-8B0000?style=flat-square&logo=letsencrypt&logoColor=white)
 
-## 1. Content Server
-
-Serwer ASP.NET Core 9.0 obsługujący katalog filmów i streaming MPEG-DASH mechanizmy wydajnościowymi i bezpieczeństwa.
-
-### Architektura
-
-```
-┌─────────────────────────────────────────────────┐
-│           Content Server (ASP.NET)              │
-├─────────────────────────────────────────────────┤
-│  Controllers                                    │
-│  ├── CatalogController    (/api/catalog)        │
-│  └── StreamingController  (/content/{id}/...)   │
-│                                                 │
-│  Services                                       │
-│  ├── CatalogService (dwupoziomowy cache)        │
-│  └── StreamingService (range requests)          │
-│                                                 │
-│  Middleware Pipeline                            │
-│  ├── ResponseCompression (Brotli/Gzip)          │
-│  ├── OutputCache (RAM, 100MB limit)             │
-│  ├── ErrorHandling                              │
-│  └── RateLimiting (per-IP)                      │
-└─────────────────────────────────────────────────┘
-         │                          │
-         ▼                          ▼
-   ┌──────────┐            ┌─────────────────┐
-   │  Redis   │            │ Content Storage │
-   │  (L2)    │            │  (File System)  │
-   └──────────┘            └─────────────────┘
-```
-
-### Mechanizmy wydajnościowe
-
-#### 1. Dwupoziomowy cache
-
-```
-Request → Output Cache (L1, RAM, 100MB) → Redis (L2, TTL 3600s) → Dysk
-```
-
-| Warstwa | Technologia | Zastosowanie | TTL |
-|---------|-------------|--------------|-----|
-| **L1** | Output Cache | Gotowe odpowiedzi HTTP | 5min - 24h |
-| **L2** | Redis | Zdeserializowane obiekty | 3600s |
-
-**Strategie cache:**
-- `/api/catalog` - 5 min (tag: `catalog`, warianty: `limit,offset,search`)
-- `/content/{id}/manifest.mpd` - 5 min
-- `/content/{id}/{quality}/init_*.m4s` - **24h** (init segments rzadko się zmieniają)
-- `/content/{id}/thumbnail.jpg` - 1h
-
-**Invalidacja automatyczna:**
-
-FileSystemWatcher nasłuchuje **wszystkich** zmian w `content/storage/`, ale invaliduje cache **tylko** gdy:
-- Zmieniono `metadata.json` (nowy tytuł, opis, jakości)
-- Dodano/usunięto folder contentu (nowy/usunięty film)
-
-Ignoruje:
-- Dodanie segmentów `.m4s` (setki plików podczas prepare-content.ps1)
-- Zmiany kluczy `.key` (nie wpływa na katalog)
-- Miniaturki, manifesty (nie wpływa na metadane katalogowe)
-
-**Efekt:** Podczas dodawania filmu cache invaliduje się **1 raz** (przy zapisie `metadata.json`) zamiast **200+ razy** (przy każdym segmencie).
-
-#### 2. Lazy loading z paginacją
-
-Bez wyszukiwania:
-```
-1. Pobierz listę ID z cache/dysku (CacheKeyContentIds)
-2. Zastosuj offset/limit na ID
-3. Równolegle załaduj tylko potrzebne contenty (Task.WhenAll)
-```
-
-Z wyszukiwaniem:
-```
-1. Pobierz wszystkie ID
-2. Równolegle załaduj wszystkie contenty
-3. Filtruj po Title (case-insensitive)
-4. Zastosuj offset/limit
-```
-
-**Korzyści:**
-- Bez search: ładuje tylko N contentów zamiast wszystkich
-- Z search: ładuje wszystkie, ale równolegle (Task.WhenAll)
-
-#### 3. Kompresja odpowiedzi
-
-```csharp
-Brotli/Gzip (CompressionLevel.Fastest)
-  ↓
-MIME types: application/json, application/dash+xml
-  ↓
-EnableForHttps = true
-```
-
-**Nie kompresuje:** `video/*`, `audio/*`, `image/*` (już skompresowane)
-
-#### 4. Request timeouts
-
-```csharp
-ConnectTimeout: 5000ms (Redis)
-SyncTimeout: 5000ms (Redis)
-HeadersTimeout: 30s (Kestrel)
-KeepAliveTimeout: 2min
-```
-
-### Mechanizmy bezpieczeństwa
-
-#### 1. Wielopoziomowa ochrona Path Traversal
-
-**Poziom 1 - Walidacja wejścia:**
-```csharp
-if (contentId.Contains("..") || contentId.Contains("/") || contentId.Contains("\\"))
-    throw new ValidationException("Invalid content ID format");
-```
-
-**Poziom 2 - Weryfikacja fizycznej ścieżki:**
-```csharp
-var fullBasePath = Path.GetFullPath(_basePath);
-var fullMetadataPath = Path.GetFullPath(metadataPath);
-
-if (!fullMetadataPath.StartsWith(fullBasePath))
-    throw new ContentNotFoundException(contentId);
-```
-
-#### 2. Rate Limiting (per-IP)
-
-| Okno czasowe | Limit | Reakcja |
-|--------------|-------|---------|
-| 1 minuta | 100 żądań | HTTP 429 |
-| 15 minut | 1000 żądań | HTTP 429 |
-
-**Implementacja:** `AspNetCoreRateLimit` z `AsyncKeyLockProcessingStrategy`
-
-#### 3. Redis jako wymagany komponent
-
-```csharp
-AbortOnConnectFail = true  // Brak fallback - fail fast
-```
-
-Jeśli Redis nie odpowiada → aplikacja nie startuje. Gwarantuje spójność cache w środowisku rozproszonym.
-
-#### 4. CancellationToken w całej warstwie serwisowej
-
-```csharp
-Task<ContentMetadata> GetContentByIdAsync(string id, CancellationToken ct)
-Task<List<ContentMetadata>> GetAllContentAsync(..., CancellationToken ct)
-```
-
-Umożliwia anulowanie długotrwałych operacji (np. client disconnect).
-
-### Health Checks
-
-| Nazwa | Sprawdza | Endpoint |
-|-------|----------|----------|
-| **self** | Czy aplikacja działa | `/health` |
-| **storage** | Dostępność folderu storage | `/health` |
-| **redis** | Połączenie z Redis | `/health` |
-
-**Format odpowiedzi:**
-```json
-{
-  "status": "Healthy",
-  "checks": [
-    { "name": "storage", "status": "Healthy", "duration": 2.5 }
-  ],
-  "totalDuration": 15.3
-}
-```
-
-### Endpointy
-
-| Metoda | Ścieżka | Parametry | Cache |
-|--------|---------|-----------|-------|
-| GET | `/api/catalog` | `limit`, `offset`, `search` | 5 min (L1+L2) |
-| GET | `/api/catalog/{id}` | - | 5 min (L1+L2) |
-| GET | `/content/{id}/manifest.mpd` | - | 5 min (L1) |
-| GET | `/content/{id}/{quality}/{segment}` | - | 24h dla `init_*` |
-| GET | `/content/{id}/thumbnail.jpg` | - | 1h (L1) |
-| GET | `/health` | - | Brak |
-
-**Range Requests:** StreamingController obsługuje `HTTP Range` dla segmentów wideo (seeking w playerze).
+</div>
 
 ---
 
-## 2. Skrypt prepare-content.ps1
-
-Kompletny pipeline przetwarzania wideo: transkodowanie, segmentacja MPEG-DASH, szyfrowanie AES-128-CTR.
-
-### Pipeline
-
-```
-Input Video (dowolny format)
-    │
-    ├─> ffprobe (analiza: fps, rozdzielczość, długość)
-    │
-    ├─> ffmpeg (transkodowanie równoległe dla każdej jakości)
-    │    ├─ H.264 (GPU: nvenc/amf/qsv)
-    │    ├─ AAC audio
-    │    └─ GOP alignment (keyframe co 4s)
-    │
-    ├─> Shaka Packager (segmentacja + szyfrowanie)
-    │    ├─ MPEG-DASH (on-demand profile)
-    │    ├─ 4s segmenty
-    │    ├─ Separate init segments
-    │    └─ AES-128-CTR (per-quality CEK)
-    │
-    └─> Generowanie metadanych
-         ├─ metadata.json (ContentMetadata)
-         ├─ encryption.json (CEK, KID)
-         └─ thumbnail.jpg (10% długości)
-```
-
-### Parametry
-
-```powershell
-./prepare-content.ps1 `
-    -InputFile "film.mp4" `
-    -Qualities @('720p', '1080p') `
-    -RequiredPlan "basic" `
-    -Description "Opis filmu" `
-    -ReleaseDate "2025-01-01"
-```
-
-| Parametr | Typ | Domyślnie | Opis |
-|----------|-----|-----------|------|
-| `-InputFile` | string | **wymagany** | Plik wejściowy |
-| `-OutputDir` | string | `./content/storage` | Katalog wyjściowy |
-| `-ContentId` | string | auto-UUID | Identyfikator contentu |
-| `-Qualities` | array | `480p, 720p` | Rozdzielczości (`480p/720p/1080p/4k/all`) |
-| `-RequiredPlan` | enum | `free` | Plan subskrypcji (`free/basic/pro`) |
-| `-SkipEncryption` | switch | `false` | Pomija szyfrowanie |
-
-### Profile transkodowania
-
-| Jakość | Rozdzielczość | Video | Audio | H.264 Profile | GOP |
-|--------|---------------|-------|-------|---------------|-----|
-| **480p** | 854×480 | 1 Mbps | 128 kbps | baseline | fps×4 |
-| **720p** | 1280×720 | 3 Mbps | 192 kbps | main | fps×4 |
-| **1080p** | 1920×1080 | 5 Mbps | 256 kbps | high | fps×4 |
-| **4K** | 3840×2160 | 15 Mbps | 320 kbps | high | fps×4 |
-
-**GOP Alignment:**
-```
-GOP size = FPS × 4s (długość segmentu)
-Przykład: 30 fps → GOP = 120 klatek
-```
-
-Gwarantuje, że keyframe pojawia się dokładnie na początku każdego segmentu MPEG-DASH.
-
-### Wsparcie GPU
-
-Wybierz kodek w zależności od GPU:
-
-| GPU | Kodek ffmpeg | Wydajność |
-|-----|--------------|-----------|
-| **NVIDIA** | `h264_nvenc` | ~10x szybciej vs CPU |
-| **AMD** | `h264_amf` | ~8x szybciej vs CPU |
-| **Intel** | `h264_qsv` | ~6x szybciej vs CPU |
-| **CPU** | `libx264` | Bazowa wydajność |
-
-Domyślnie: `h264_nvenc` (linia 162 w skrypcie).
-
-### Szyfrowanie (AES-128-CTR)
-
-**Kluczowe cechy:**
-- **Per-quality CEK** - każda jakość (480p, 720p, etc.) ma osobny klucz
-- **Clear lead: 0s** - szyfrowanie od pierwszego segmentu
-- **Random CEK** - 16 bajtów hex generowane losowo
-- **UUID KID** - unikalny Key ID dla każdego CEK
-
-**Struktura encryption.json:**
-```json
-{
-  "ContentId": "uuid",
-  "SegmentDuration": 4,
-  "Qualities": {
-    "480p": {
-      "KeyId": "32-char-hex-kid",
-      "KeyFile": "480p.key",
-      "Algorithm": "AES-128-CTR"
-    },
-    "720p": { ... }
-  }
-}
-```
-
-**Plik `.key`:** Zawiera raw hex CEK (np. `a1b2c3d4e5f6...`) - **MUSI** być zapisany w bazie DRM Server z envelope encryption.
-
-### Struktura wyjściowa
-
-```
-content/storage/{contentId}/
-├── manifest.mpd              # Manifest MPEG-DASH
-├── metadata.json             # Metadane (tytuł, długość, jakości, URL-e)
-├── encryption.json           # Metadane szyfrowania (CEK, KID)
-├── thumbnail.jpg             # Miniatura 480px (10% długości filmu)
-│
-├── 480p/
-│   ├── 480p.key              # CEK dla 480p (16 bajtów hex)
-│   ├── init_video.m4s        # Init segment video
-│   ├── init_audio.m4s        # Init segment audio
-│   ├── video_N.m4s           # Segmenty video (N = 1, 2, 3...)
-│   └── audio_N.m4s           # Segmenty audio
-│
-├── 720p/
-│   └── [analogicznie]
-└── 1080p/
-    └── [analogicznie]
-```
-
-### Wymagania
-
-| Narzędzie | Minimalna wersja | Zastosowanie |
-|-----------|------------------|--------------|
-| **PowerShell** | 7.0+ | Wykonanie skryptu |
-| **ffmpeg** | 4.4+ | Transkodowanie |
-| **ffprobe** | 4.4+ | Analiza metadanych |
-| **Shaka Packager** | 2.6+ | Segmentacja + szyfrowanie |
-
-**Instalacja:** `./install-tools.ps1` (pobiera Shaka Packager do `./tools/`).
+NEXA is a self-hosted VOD platform with a custom DRM system. It implements the full content-protection lifecycle: from preparing, encrypting and uploading video to the server, through secure distribution of device-bound keys, to enforcing quality and playback limits tied to the subscription plan.
 
 ---
 
-## 3. Biblioteka Shared
+## Table of contents
 
-Współdzielona biblioteka .NET 9.0 z modelami danych, hierarchią wyjątków i stałymi systemowymi.
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [DRM system](#drm-system)
+- [Content preparation pipeline](#content-preparation-pipeline)
+- [Streaming](#streaming)
+- [Caching](#caching)
+- [API endpoints](#api-endpoints)
+- [Client](#client)
+- [Screenshots](#screenshots)
+- [Quick start](#quick-start)
+- [Scripts](#scripts)
+- [Requirements](#requirements)
 
-### Struktura
+---
 
-```
-Shared/
-├── Constants/
-│   └── Plans.cs                          # free, basic, pro
-├── Exceptions/
-│   ├── NexaException.cs                  # Bazowa (abstract)
-│   ├── ValidationException.cs            # 400
-│   ├── NotFoundException.cs              # 404
-│   ├── ServiceUnavailableException.cs    # 503
-│   └── InternalServerException.cs        # 500
-└── Models/
-    ├── ErrorCode.cs                      # Stałe kodów błędów
-    ├── ErrorResponse.cs                  # RFC 7807 Problem Details
-    ├── ContentMetadata.cs                # Metadane filmu
-    └── CatalogResponse.cs                # Odpowiedź /api/catalog
-```
+## Architecture
 
-### Hierarchia wyjątków
+```mermaid
+flowchart TD
+    Client["Client WinUI 3\nWebView2 + Shaka Player"]
 
-```
-Exception
-  │
-  └─ NexaException (abstract)
-      ├─ ErrorCode: string          # np. "CONTENT_NOT_FOUND"
-      ├─ StatusCode: int             # HTTP status (400/404/500/503)
-      └─ Context: Dictionary         # Dodatkowe dane diagnostyczne
-      │
-      ├─ ValidationException         → 400 Bad Request
-      ├─ NotFoundException           → 404 Not Found
-      ├─ ServiceUnavailableException → 503 Service Unavailable
-      └─ InternalServerException     → 500 Internal Server Error
-```
+    Client -->|HTTPS :443| Nginx
 
-**Użycie:**
-```csharp
-throw new NotFoundException(
-    $"Film '{contentId}' nie został znaleziony.",
-    new Dictionary<string, object> { ["contentId"] = contentId }
-);
+    subgraph Docker["Docker Network - nexa-network"]
+        Nginx["Nginx Gateway"]
+
+        Nginx -->|"/api/auth/*\n/api/license/*\n/api/device/*"| DRM["DrmLicenseServer\nASP.NET Core"]
+        Nginx -->|"/api/catalog/*\n/content/*"| Content["ContentServer\nASP.NET Core"]
+
+        DRM --> PG[("Database\nPostgreSQL")]
+        DRM --> Redis["Cache\nRedis"]
+        Content --> Redis
+        Content --> Storage[("Content Storage")]
+    end
 ```
 
-**Obsługa w middleware:**
-```csharp
-catch (NexaException nex)
-{
-    context.Response.StatusCode = nex.StatusCode;
-    await context.Response.WriteAsJsonAsync(new ErrorResponse
-    {
-        ErrorCode = nex.ErrorCode,
-        Message = nex.Message,
-        Context = nex.Context,
-        Timestamp = DateTime.UtcNow,
-        Path = context.Request.Path
-    });
-}
+Nginx is the single entry point to the system. The backend services do not expose any ports externally; all communication happens over the internal network.
+
+---
+
+## Project structure
+
 ```
-
-### Modele danych
-
-#### ContentMetadata
-
-```csharp
-public class ContentMetadata
-{
-    public string ContentId { get; set; }              // UUID
-    public string Title { get; set; }
-    public string Description { get; set; }
-    public double DurationSeconds { get; set; }
-    public string RequiredPlan { get; set; }           // free/basic/pro
-    public List<string> AvailableQualities { get; set; }  // [480p, 720p, ...]
-    public string ManifestUrl { get; set; }            // /content/{id}/manifest.mpd
-    public string ThumbnailUrl { get; set; }           // /content/{id}/thumbnail.jpg
-    public List<string>? Genres { get; set; }
-    public DateTime? ReleaseDate { get; set; }
-}
-```
-
-#### CatalogResponse
-
-```csharp
-public class CatalogResponse
-{
-    public int Total { get; set; }                     // Całkowita liczba filmów
-    public int Limit { get; set; }                     // Żądany limit (max 50)
-    public int Offset { get; set; }                    // Pozycja startowa
-    public List<ContentMetadata> Items { get; set; }   // Contenty na stronie
-}
-```
-
-#### ErrorResponse (RFC 7807)
-
-```csharp
-public class ErrorResponse
-{
-    public string ErrorCode { get; set; }              // CONTENT_NOT_FOUND
-    public string Message { get; set; }                // Komunikat użytkownika
-    public string? Details { get; set; }               // Stack trace (tylko dev)
-    public DateTime Timestamp { get; set; }
-    public string? Path { get; set; }                  // /api/catalog/invalid-id
-    public Dictionary<string, object>? Context { get; set; }
-}
-```
-
-### Kody błędów
-
-| Kod | HTTP | Moduł |
-|-----|------|-------|
-| `VALIDATION_ERROR` | 400 | Ogólny |
-| `NOT_FOUND` | 404 | Ogólny |
-| `SERVICE_UNAVAILABLE` | 503 | Ogólny |
-| `INTERNAL_SERVER_ERROR` | 500 | Ogólny |
-| `CONTENT_NOT_FOUND` | 404 | Content Server |
-| `MANIFEST_NOT_FOUND` | 404 | Content Server |
-| `SEGMENT_NOT_FOUND` | 404 | Content Server |
-| `THUMBNAIL_NOT_FOUND` | 404 | Content Server |
-| `STORAGE_UNAVAILABLE` | 503 | Content Server |
-
-### Stałe planów subskrypcji
-
-```csharp
-public static class Plans
-{
-    public const string FREE = "free";
-    public const string BASIC = "basic";
-    public const string PRO = "pro";
-
-    public static bool IsValid(string plan) => plan is FREE or BASIC or PRO;
-}
+NEXA/
+├── src/
+│   ├── DrmLicenseServer/    Authentication, JWT, DRM, licenses, device management
+│   ├── ContentServer/       Content catalog, MPEG-DASH streaming
+│   ├── Nexa.Client/         WinUI 3 desktop app with the player
+│   ├── Shared/              Shared models, exceptions, constants
+│   └── TestWebPlayer/       Local HTTP server for playback testing
+├── scripts/                 Operational scripts
+├── tools/                   CLI tools
+├── ssl/                     Sample SSL certificate
+├── tests/
+├── upload-content.ps1       Full content-import pipeline
+├── docker-compose.yml
+└── nginx.conf
 ```
 
 ---
 
-## Przepływ danych
+## DRM system
 
+### Device key generation
+
+The client uses a TPM-first strategy with automatic software fallback:
+
+| Method | Private key storage | Limitations |
+|--------|----------------------------------|--------------|
+| **TPM** (Windows CNG) | Hardware module, the key never leaves the TPM | None, so the maximum quality depends on the plan |
+| **Software** (RSA-2048) | Windows PasswordVault, DPAPI encryption | Maximum quality capped at 720p |
+
+The device identifier is generated deterministically: `SHA256(public_key)` -> GUID. The same key pair always yields the same Device ID.
+
+### Device registration
+
+The client sends its public key in PEM format together with TPM attestation information. The server validates the PEM format (minimum RSA size is 2048 bits) and the key modulus. Up to 10 devices per user. Changing the key for an existing device is recorded in the audit log.
+
+### License issuance
+
+```mermaid
+sequenceDiagram
+    participant K as Client
+    participant S as DrmLicenseServer
+    participant R as Redis
+    participant DB as PostgreSQL
+
+    K->>S: GET /api/license/{contentId}?deviceId=...
+    Note over S: Validate JWT, plan, device
+
+    S->>DB: Fetch the device public key
+    DB-->>S: PublicKeyPem + hasTpm (boolean)
+
+    S->>R: Fetch the CEK (AES-256-GCM encrypted)
+    R-->>S: EncryptedCEK + KeyId (per quality)
+
+    Note over S: Decrypt the CEK with the master key
+
+    alt Device with TPM
+        Note over S: maxQuality = plan max<br/>(Free→720p, Basic→1080p, Pro→8K)
+    else Device without TPM
+        Note over S: maxQuality = min(plan max, 720p)<br/>Basic and Pro capped at 720p
+    end
+
+    Note over S: Filter available qualities by maxQuality
+    Note over S: Re-encrypt each CEK<br/>with the device public key (RSA-OAEP-SHA256)
+
+    S->>DB: Store the issued license (audit)
+    S-->>K: MultiQualityLicenseResponse
+
+    alt Private key in TPM
+        Note over K: Decrypt the CEK via CNG/TPM<br/>(key never leaves the module)
+    else Private key in software
+        Note over K: Decrypt the CEK with the key from PasswordVault (DPAPI)
+    end
+    K->>K: Shaka Player plays the encrypted segments
 ```
-┌──────────────────────┐
-│  prepare-content.ps1 │  1. Przetwarza wideo
-└──────────┬───────────┘     (transkodowanie, segmentacja, szyfrowanie)
-           │
-           ▼
-┌─────────────────────────────────┐
-│   Content Storage               │
-│   /{contentId}/                 │
-│   ├── manifest.mpd              │
-│   ├── metadata.json ◄───────────┼─── 2. CatalogService indeksuje
-│   ├── encryption.json           │        (FileSystemWatcher)
-│   ├── thumbnail.jpg             │
-│   └── {quality}/*.m4s           │
-└─────────────────────────────────┘
-           │
-           ▼
-┌────────────────────────────────────────┐
-│       Content Server                   │
-│                                        │
-│  ┌──────────────────────────────────┐  │
-│  │ Dwupoziomowy cache               │  │
-│  │ L1: Output Cache (RAM, 100MB)    │  │
-│  │ L2: Redis (TTL 3600s)            │  │
-│  └──────────────────────────────────┘  │
-│                                        │
-│  ┌──────────────────────────────────┐  │
-│  │ Lazy loading + Task.WhenAll      │  │
-│  │ Paginacja na ID                  │  │
-│  └──────────────────────────────────┘  │
-│                                        │
-│  Models: ContentMetadata,              │
-│          CatalogResponse, ErrorResponse│
-│  (z biblioteki Shared)                 │
-└────────────────────────────────────────┘
-           │
-           │ 3. REST API + MPEG-DASH streaming
-           ▼
-┌──────────────────────┐
-│  Aplikacja kliencka  │
-│  (Web/Mobile)        │
-└──────────────────────┘
-```
+
+The CEK stored in Redis is protected by an AES-256-GCM master key. When a license is issued, the CEK is decrypted and then re-encrypted with the public key of the specific device. The private key never leaves the client.
+
+### Quality limits
+
+The maximum available quality depends on the subscription plan and the presence of a TPM:
+
+| Plan | With TPM | Without TPM |
+|------|-------|---------|
+| Free | 720p | 720p |
+| Basic | 1080p | 720p |
+| Pro | 4320p | 720p |
+
+The lack of a TPM caps quality at 720p only when the plan allows higher resolutions.
+
+Each quality has its own CEK. This makes it possible to selectively revoke access to higher resolutions without affecting the lower ones.
+
+### License lifecycle
+
+- License validity: 8 hours from issuance
+- Heartbeat every 30 seconds; no heartbeat for 2 minutes triggers automatic expiry
+- Concurrent stream limits: Free/Basic 1, Pro 2
+- `LicenseCleanupService` periodically removes expired records (interval: 6 hours, retention: 7 days)
 
 ---
 
-## Podsumowanie techniczne
+## Content preparation pipeline
 
-| Moduł | Technologia | Kluczowe mechanizmy |
-|-------|-------------|---------------------|
-| **Content Server** | ASP.NET Core 9.0 | Dwupoziomowy cache, lazy loading, path traversal protection, rate limiting (per-IP), CancellationToken, GPU-ready |
-| **prepare-content.ps1** | PowerShell 7 + FFmpeg + Shaka | GOP alignment, per-quality CEK, AES-128-CTR, GPU acceleration (nvenc/amf/qsv), Task.WhenAll |
-| **Shared** | .NET 9.0 Class Library | Hierarchia wyjątków z Context, RFC 7807, typed models, Plans validation |
+The main entry point is `upload-content.ps1`, which orchestrates the whole process from a raw video file to streaming-ready content. The `prepare-content.ps1` script can also be run standalone if the content is to be imported into the server manually.
 
-### Zależności
-
+```mermaid
+flowchart TD
+    A["Source video file"] --> B["Transcode per quality"]
+    B --> C["MPEG-DASH segmentation\n+ AES-128-CTR encryption"]
+    C --> D["Files on disk:\nmanifest.mpd\n{quality}/init_*.m4s\n{quality}/seg_*.m4s\nthumbnail.jpg\nmetadata.json"]
+    C --> E["CEK in RAM"]
+    D --> F["docker cp\nto the content-server container"]
+    E --> G["POST /api/admin/content/register\nadmin JWT, HTTPS\nCEK + metadata atomically to DRM"]
+    F --> H["Content Server\nfiles ready for streaming"]
+    G --> I["DRM Server\nCEK encrypted in Redis\nqualities and metadata registered"]
 ```
-prepare-content.ps1
-       │
-       │ Generuje
-       ▼
-┌─────────────────┐
-│ Content Storage │  ◄──── FileSystemWatcher
-└────────┬────────┘           (auto-invalidacja)
-         │
-         │ Czyta (lazy)
-         ▼
-┌──────────────────┐      Używa     ┌────────┐
-│ Content Server   │ ◄───────────── │ Shared │
-└──────────────────┘                └────────┘
-         │
-         │ Serwuje
-         ▼
-┌──────────────────┐
-│  Klient (DASH)   │
-└──────────────────┘
-```
+
+**Key security.** Each quality gets its own CEK generated in memory (`[System.Security.Cryptography.RandomNumberGenerator]`). Keys are never written to local disk. They are sent only over HTTPS to the admin API and only then encrypted with the AES-256-GCM master key before being stored in Redis.
+
+**Server-side registration.** In a single atomic operation, the `POST /api/admin/content/register` endpoint fetches metadata from ContentServer (`RequiredPlan`, `ReleaseDate`), imports each CEK into Redis, adds the qualities to the qualities set, and invalidates the relevant cache.
+
+### Quality presets
+
+| Quality | Resolution | Video bitrate | Audio bitrate | H.264 profile |
+|--------|---------------|---------------|---------------|---------------|
+| 144p | 256x144 | 200 kbps | 64 kbps | baseline |
+| 240p | 426x240 | 400 kbps | 96 kbps | baseline |
+| 360p | 640x360 | 750 kbps | 128 kbps | baseline |
+| 480p | 854x480 | 1 Mbps | 128 kbps | baseline |
+| 720p | 1280x720 | 3 Mbps | 192 kbps | main |
+| 1080p | 1920x1080 | 5 Mbps | 256 kbps | high |
+| 1440p | 2560x1440 | 10 Mbps | 320 kbps | high |
+| 2160p | 3840x2160 | 20 Mbps | 320 kbps | high |
+| 4320p | 7680x4320 | 50 Mbps | 320 kbps | high |
+
+### GPU acceleration
+
+| Accelerator | FFmpeg codec |
+|-------------|--------------|
+| NVIDIA NVENC | h264_nvenc |
+| AMD AMF | h264_amf |
+| Intel QSV | h264_qsv |
+| CPU | libx264 |
+
+4-second segments with GOP alignment. Each quality is encrypted with a separate CEK.
+
+---
+
+## Streaming
+
+Content is delivered in MPEG-DASH. Codecs: H.264 (video), AAC (audio). HTTP Range request support enables seeking without downloading the entire file. Nginx runs with `proxy_buffering off` and a 300-second timeout for video segments. Initialization segments (`init_*.m4s`) are cached for 24 hours.
+
+---
+
+## Caching
+
+ContentServer uses a two-level cache. L1 is an ASP.NET Output Cache held in RAM. L2 is Redis with a 3600 s TTL. Video segments are not cached server-side but served directly from disk; their caching is left to the HTTP client (e.g. initialization segments `init_*.m4s` receive a `Cache-Control: public, max-age=86400, immutable` header).
+
+**L1: Output Cache (RAM)**
+
+| Endpoint | TTL |
+|----------|-----|
+| `GET /api/catalog` | 5 min |
+| `GET /api/catalog/{id}` | 5 min |
+| `GET /content/{id}/manifest.mpd` | 5 min |
+| `GET /api/catalog/{id}/thumbnail.jpg` | 1 h |
+
+**L2: Redis**
+
+| Key | Type | TTL | Contents |
+|-------|-----|-----|-----------|
+| `cek:{contentId}:{quality}` | STRING | none | CEK encrypted with the AES-256-GCM master key |
+| `content:meta:{contentId}` | STRING | none | `RequiredPlan`, `ReleaseDate` |
+| `content:qualities:{contentId}` | SET | none | Set of available qualities |
+| `content:qualities:{contentId}:{plan}:{tpm\|notpm}` | STRING | 3600 s | Sorted list of qualities for the given plan/TPM combination |
+| `catalog:ids` | STRING | 3600 s | List of all `contentId` |
+| `catalog:id:{contentId}` | STRING | 3600 s | Full metadata |
+
+**Invalidation.** A `FileSystemWatcher` monitors the `/content/storage` directory. Changing `metadata.json` or adding/removing a content folder invalidates the `catalog:ids` and `catalog:id:*` keys in Redis and the `catalog` tag in L1. Importing a CEK via the API invalidates only the `content:qualities:{contentId}:*` keys without touching the CEKs or metadata themselves.
+
+---
+
+## API endpoints
+
+### DrmLicenseServer
+
+| Method | Path | Description | Auth |
+|--------|---------|------|-------------|
+| POST | `/api/auth/register` | Register a user | None |
+| POST | `/api/auth/login` | Log in | None |
+| POST | `/api/auth/refresh` | Refresh the token | None |
+| POST | `/api/device/register` | Register a device | JWT |
+| GET | `/api/device` | List the user's devices | JWT |
+| GET | `/api/device/challenge` | Get a device challenge | JWT |
+| DELETE | `/api/device/{deviceId}` | Deactivate a device | JWT |
+| GET | `/api/license/{contentId}` | Get a DRM license | JWT |
+| POST | `/api/license/{contentId}/heartbeat` | Heartbeat for an active stream | JWT |
+| DELETE | `/api/license/{contentId}` | Release a license | JWT |
+| POST | `/api/admin/content/register` | Atomic content registration: import CEK + metadata from ContentServer in one operation | JWT (`admin` role) |
+
+### ContentServer
+
+| Method | Path | Description | Cache |
+|--------|---------|------|-------|
+| GET | `/api/catalog` | Content list with pagination and search | 5 min |
+| GET | `/api/catalog/{id}` | Content details | 5 min |
+| GET | `/content/{id}/manifest.mpd` | MPEG-DASH manifest | 5 min |
+| GET | `/content/{id}/{quality}/{segment}` | Video/audio segment | 24 h HTTP Cache (init) |
+| GET | `/api/catalog/{id}/thumbnail.jpg` | Thumbnail | 1 h |
+
+---
+
+## Client
+
+A WinUI 3 desktop app with the Shaka Player 4.16 embedded in WebView2. It follows the MVVM pattern with CommunityToolkit.Mvvm. Views are bound to view models, functionality is split into services behind interfaces, and everything is wired through dependency injection.
+
+| Component | Responsibility |
+|-----------|-----------------|
+| `DeviceRegistrationService` | RSA key generation (TPM/software), device registration |
+| `DrmService` | License retrieval, CEK decryption, heartbeat |
+| `TokenManager` | Token storage (DPAPI), automatic refresh |
+| `CatalogService` | Catalog browsing, search, pagination |
+| `SystemHealthService` | Monitoring backend service availability |
+
+The access token is kept in RAM (plaintext), while the refresh token is protected by DPAPI in RAM (single session) or stored securely in the Windows PasswordVault ("Remember me" mode).
+
+---
+
+## Screenshots
+
+| Login | Catalog | Player |
+|:---------:|:-------:|:----------:|
+| <img src="https://github.com/user-attachments/assets/168cff3b-8025-4d49-81fe-5ebc770304d5" alt="login" width="300" /> | <img src="https://github.com/user-attachments/assets/6735471e-0919-420e-8880-0b2fbeb53a1e" alt="catalog" width="300" /> | <img src="https://github.com/user-attachments/assets/24681652-f717-4948-a7fa-b258dff9bd94" alt="player" width="300" /> |
+
+---
+
+## Quick start
+
+1. Clone the repository
+   ```bash
+   git clone <repo-url> && cd NEXA
+   ```
+
+2. Configure the environment variables
+   ```bash
+   cp .env.example .env
+   # Fill in: JWT_SECRET, MASTER_ENCRYPTION_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD
+   ```
+
+3. Install the SSL certificate on Windows. The `ssl/` folder contains a sample SSL certificate; install and trust it in the system, otherwise the player and browsers will reject the secure connection.
+
+4. Start the infrastructure (requires Docker installed)
+   ```bash
+   docker compose up -d
+   ```
+
+5. Add video content (transcoding + upload + CEK registration in one step)
+   ```powershell
+   ./upload-content.ps1 -InputFile "movie.mp4" -Qualities @('720p','1080p') -Title "Title" -Plan "basic"
+   ```
+
+6. Swagger UI is available at:
+   `https://localhost/swagger/` for the DRM server
+   `https://localhost/content-swagger/` for the Content server
+
+7. Run the desktop client
+   Open the `Nexa.sln` solution in Visual Studio (requires the Windows App SDK / WinUI 3 installed).
+   Set the `Nexa.Client` project as the startup project and press `F5` to build and run the player.
+
+---
+
+## Scripts
+
+| Script | Description |
+|--------|------|
+| `upload-content.ps1` | Main pipeline: generates an admin JWT, calls `prepare-content.ps1`, copies the files to the container via `docker cp`, registers the content and imports the CEKs into DRM through `POST /api/admin/content/register`. Keys never touch the disk. |
+| `scripts/prepare-content.ps1` | Transcoding (FFmpeg, GPU/CPU), segmentation and encryption (Shaka Packager, AES-128-CTR per quality), thumbnail and `metadata.json` generation. Returns `ContentId` and `EncryptionData` in memory. |
+| `scripts/import-ceks.ps1` | Alternative import path: reads `encryption.json` from disk and loads the CEKs into Redis directly. Used when `upload-content.ps1` is not an option (e.g. content prepared manually). |
+
+---
+
+## Requirements
+
+| Component | Version |
+|-----------|--------|
+| .NET SDK | 9.0+ |
+| Docker / Docker Compose | 24+ / 2.20+ |
+| PowerShell | 7.0+ |
+| FFmpeg | 4.4+ |
+| Shaka Packager | 2.6+ |
+| Windows SDK | 10.0+ |

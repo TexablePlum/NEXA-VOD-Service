@@ -42,9 +42,9 @@ namespace Nexa.Client.Services.Catalog
             // Napraw URL miniaturek (dodaj base URL jeśli relatywny)
             foreach (var item in response.Items)
             {
-                if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http"))
+                if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 {
-                    item.ThumbnailUrl = $"{_baseUrl}{item.ThumbnailUrl}";
+                    item.ThumbnailUrl = $"{_baseUrl.TrimEnd('/')}/{item.ThumbnailUrl.TrimStart('/')}";
                 }
             }
 
@@ -60,9 +60,9 @@ namespace Nexa.Client.Services.Catalog
             var url = $"{_baseUrl}/api/catalog/{contentId}";
             var item = await GetAsync<ContentMetadata>(url, ct);
 
-            if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http"))
+            if (!string.IsNullOrEmpty(item.ThumbnailUrl) && !item.ThumbnailUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
-                item.ThumbnailUrl = $"{_baseUrl}{item.ThumbnailUrl}";
+                item.ThumbnailUrl = $"{_baseUrl.TrimEnd('/')}/{item.ThumbnailUrl.TrimStart('/')}";
             }
 
             return item;

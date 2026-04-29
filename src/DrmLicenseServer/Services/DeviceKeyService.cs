@@ -3,8 +3,10 @@ using Nexa.DrmLicenseServer.Data;
 using Nexa.DrmLicenseServer.Data.Entities;
 using Nexa.Shared.Exceptions;
 using Npgsql;
+using StackExchange.Redis;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using Nexa.Shared.Models;
 
 namespace Nexa.DrmLicenseServer.Services;
 
@@ -17,6 +19,7 @@ public class DeviceKeyService
     private readonly CekPublicKeyEncryptionService _encryptionService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<DeviceKeyService> _logger;
+    private readonly IConnectionMultiplexer _redisConnection;
 
     private const int MaxDevicesPerUser = 10; // Limit urządzeń na użytkownika
 
@@ -25,13 +28,31 @@ public class DeviceKeyService
     public DeviceKeyService(
         NexaDbContext dbContext,
         CekPublicKeyEncryptionService encryptionService,
+        IConnectionMultiplexer redisConnection,
         IConfiguration configuration,
         ILogger<DeviceKeyService> logger)
     {
         _dbContext = dbContext;
         _encryptionService = encryptionService;
+        _redisConnection = redisConnection;
         _configuration = configuration;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Generuje wyzwanie (Nonce) dla klienta.
+    /// Zapisuje je w Redis na 2 minuty.
+    /// </summary>
+    public async Task<DeviceChallengeResponse> GenerateChallengeAsync(string deviceId)
+    {
+        var nonceBytes = new byte[32];
+        RandomNumberGenerator.Fill(nonceBytes);
+        var nonce = Convert.ToBase64String(nonceBytes);
+
+        var db = _redisConnection.GetDatabase();
+        await db.StringSetAsync($"device:challenge:{deviceId}", nonce, TimeSpan.FromMinutes(2));
+
+        return new DeviceChallengeResponse { Nonce = nonce };
     }
 
     /// <summary>
@@ -41,8 +62,9 @@ public class DeviceKeyService
         string userId,
         string deviceId,
         string publicKeyPem,
+        string nonce,
+        string signatureBase64,
         string? deviceName = null,
-        string? tpmAttestation = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(deviceId))
@@ -63,6 +85,43 @@ public class DeviceKeyService
             _logger.LogWarning("Invalid public key during device registration for user {UserId}: {Error}", userId, keyError);
             throw new ValidationException($"Invalid public key: {keyError}");
         }
+
+        // Weryfikacja Nonce z Redis
+        var db = _redisConnection.GetDatabase();
+        var cachedNonce = await db.StringGetAsync($"device:challenge:{deviceId}");
+        if (string.IsNullOrEmpty(cachedNonce) || cachedNonce != nonce)
+        {
+            throw new UnauthorizedException("Invalid or expired challenge nonce", new Dictionary<string, object> { { "reason", "device-challenge-failed" } });
+        }
+
+        // Kryptograficzna Weryfikacja Posiadania Klucza (Proof of Possession)
+        try
+        {
+            var rsa = RSA.Create();
+            var keyContentBytes = Convert.FromBase64String(
+                publicKeyPem.Replace("-----BEGIN PUBLIC KEY-----", "")
+                            .Replace("-----END PUBLIC KEY-----", "")
+                            .Replace("\n", "")
+                            .Replace("\r", ""));
+            rsa.ImportSubjectPublicKeyInfo(keyContentBytes, out _);
+
+            var payloadBytes = System.Text.Encoding.UTF8.GetBytes($"{deviceId}|{nonce}");
+            var signatureBytes = Convert.FromBase64String(signatureBase64);
+
+            if (!rsa.VerifyData(payloadBytes, signatureBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+            {
+                _logger.LogWarning("Invalid RSA signature for device registration. User: {UserId}, Device: {DeviceId}", userId, deviceId);
+                throw new UnauthorizedException("Cryptographic Proof of Possession failed", new Dictionary<string, object> { { "reason", "device-signature-failed" } });
+            }
+        }
+        catch (Exception ex) when (ex is not UnauthorizedException)
+        {
+            _logger.LogError(ex, "Error verifying device key signature. User: {UserId}, Device: {DeviceId}", userId, deviceId);
+            throw new ValidationException("Invalid signature or public key format");
+        }
+        
+        // Jednorazowe wyzwanie zostało wykorzystane
+        await db.KeyDeleteAsync($"device:challenge:{deviceId}");
 
         const int maxRetries = 3;
         for (int attempt = 0; attempt < maxRetries; attempt++)
@@ -91,7 +150,7 @@ public class DeviceKeyService
                     // Aktualizuje istniejące urządzenie (re-registration)
                     existingDevice.PublicKeyPem = publicKeyPem;
                     existingDevice.DeviceName = deviceName;
-                    existingDevice.TpmAttestation = tpmAttestation;
+                    existingDevice.TpmAttestation = signatureBase64; // Reused column for backward schema compatibility
                     existingDevice.LastUsedAt = DateTime.UtcNow;
                     existingDevice.IsActive = true;
 
@@ -126,7 +185,7 @@ public class DeviceKeyService
                     DeviceId = deviceId,
                     DeviceName = deviceName,
                     PublicKeyPem = publicKeyPem,
-                    TpmAttestation = tpmAttestation,
+                    TpmAttestation = signatureBase64, // Reused column for backward schema compatibility
                     RegisteredAt = DateTime.UtcNow,
                     LastUsedAt = DateTime.UtcNow,
                     IsActive = true

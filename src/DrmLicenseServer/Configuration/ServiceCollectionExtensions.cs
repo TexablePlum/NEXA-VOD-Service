@@ -203,7 +203,7 @@ public static class ServiceCollectionExtensions
             options.AddPolicy("NexaClientPolicy", policy =>
             {
                 policy
-                    .AllowAnyOrigin()
+                    .WithOrigins("https://nexa.player", "https://localhost")
                     .AllowAnyMethod()
                     .AllowAnyHeader();
             });

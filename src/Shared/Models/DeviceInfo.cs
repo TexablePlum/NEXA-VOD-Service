@@ -10,5 +10,5 @@ public class DeviceInfo
     public DateTime RegisteredAt { get; set; }
     public DateTime LastUsedAt { get; set; }
     public bool IsActive { get; set; }
-    public bool HasTpmAttestation { get; set; }
+    public bool IsCryptographicallyVerified { get; set; }
 }

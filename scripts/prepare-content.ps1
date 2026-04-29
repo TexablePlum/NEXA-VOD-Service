@@ -61,6 +61,14 @@ function Write-Failure {
 }
 
 function Test-Dependencies {
+    # Dodaje pobrane ffmpeg do PATH, aby Get-Command go widział
+    $localFfmpegPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\tools\ffmpeg"))
+    if (Test-Path $localFfmpegPath) {
+        if ($env:PATH -notmatch [regex]::Escape($localFfmpegPath)) {
+            $env:PATH = "$localFfmpegPath;$env:PATH"
+        }
+    }
+
     $required = @('ffmpeg', 'ffprobe')
     $missing = @()
     
@@ -70,17 +78,41 @@ function Test-Dependencies {
         }
     }
     
-    if ($missing.Count -gt 0) {
-        Write-Failure "Brakujace narzedzia: $($missing -join ', ')"
-        Write-Info "Uruchom: .\install-tools.ps1"
-        exit 1
-    }
-    
     $shakaPath = "./tools/shaka-packager/packager.exe"
-    if (-not (Test-Path $shakaPath) -and -not $SkipEncryption) {
-        Write-Failure "Shaka Packager nie znaleziony: $shakaPath"
-        Write-Info "Uruchom: .\install-tools.ps1"
-        exit 1
+    $isShakaMissing = (-not (Test-Path $shakaPath) -and -not $SkipEncryption)
+
+    if ($missing.Count -gt 0 -or $isShakaMissing) {
+        Write-Info "Brak wymaganych narzędzi. Próba automatycznej instalacji..."
+        try {
+            $installScript = Join-Path $PSScriptRoot "install-tools.ps1"
+            & $installScript
+            
+            # Po instalacji upewniamy się, że nowa ścieżka do ffmpeg jest w PATH
+            if (Test-Path $localFfmpegPath) {
+                if ($env:PATH -notmatch [regex]::Escape($localFfmpegPath)) {
+                    $env:PATH = "$localFfmpegPath;$env:PATH"
+                }
+            }
+        }
+        catch {
+            Write-Failure "Błąd podczas automatycznej instalacji narzędzi: $_"
+        }
+
+        # Ponowne sprawdzenie po instalacji
+        $missing = @()
+        foreach ($tool in $required) {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+                $missing += $tool
+            }
+        }
+        $isShakaMissing = (-not (Test-Path $shakaPath) -and -not $SkipEncryption)
+
+        if ($missing.Count -gt 0 -or $isShakaMissing) {
+            if ($missing.Count -gt 0) { Write-Failure "Nadal brakujące narzędzia: $($missing -join ', ')" }
+            if ($isShakaMissing) { Write-Failure "Shaka Packager nadal nie znaleziony: $shakaPath" }
+            Write-Failure "Automatyczna instalacja nie powiodła się."
+            exit 1
+        }
     }
     
     return $shakaPath
@@ -94,6 +126,7 @@ function Get-VideoInfo {
     $info = ffprobe -v quiet -print_format json -show_format -show_streams $FilePath | ConvertFrom-Json
     
     $videoStream = $info.streams | Where-Object { $_.codec_type -eq 'video' } | Select-Object -First 1
+    $audioStream = $info.streams | Where-Object { $_.codec_type -eq 'audio' } | Select-Object -First 1
     
     $fpsRational = $videoStream.r_frame_rate -split '/'
     $fps = [math]::Round([double]$fpsRational[0] / [double]$fpsRational[1], 2)
@@ -105,6 +138,7 @@ function Get-VideoInfo {
         Bitrate = [math]::Round($info.format.bit_rate / 1000000, 2)
         Codec = $videoStream.codec_name
         Fps = $fps
+        HasAudio = ($null -ne $audioStream)
     }
 }
 
@@ -280,7 +314,10 @@ function Invoke-Segmentation {
         [string]$ShakaPath,
 
         [Parameter()]
-        [switch]$SkipEncryption
+        [switch]$SkipEncryption,
+
+        [Parameter()]
+        [bool]$HasAudio = $true
     )
 
     Write-Info "Rozpoczynanie segmentacji dla wszystkich jakosci..."
@@ -314,10 +351,14 @@ function Invoke-Segmentation {
         }
 
         if (-not $SkipEncryption) {
-            $inputStreams += "in=$filePath,stream=audio,init_segment=$qualityDir/init_audio.m4s,segment_template=$qualityDir/audio_`$Number$.m4s,drm_label=$quality"
+            if ($HasAudio) {
+                $inputStreams += "in=$filePath,stream=audio,init_segment=$qualityDir/init_audio.m4s,segment_template=$qualityDir/audio_`$Number$.m4s,drm_label=$quality"
+            }
             $inputStreams += "in=$filePath,stream=video,init_segment=$qualityDir/init_video.m4s,segment_template=$qualityDir/video_`$Number$.m4s,drm_label=$quality"
         } else {
-            $inputStreams += "in=$filePath,stream=audio,init_segment=$qualityDir/init_audio.m4s,segment_template=$qualityDir/audio_`$Number$.m4s"
+            if ($HasAudio) {
+                $inputStreams += "in=$filePath,stream=audio,init_segment=$qualityDir/init_audio.m4s,segment_template=$qualityDir/audio_`$Number$.m4s"
+            }
             $inputStreams += "in=$filePath,stream=video,init_segment=$qualityDir/init_video.m4s,segment_template=$qualityDir/video_`$Number$.m4s"
         }
     }
@@ -491,6 +532,7 @@ NEXA - Content Preparation Pipeline
         OutputDir  = $contentDir
         ContentId  = $ContentId
         ShakaPath  = $shakaPath
+        HasAudio   = $videoInfo.HasAudio
     }
 
     if ($SkipEncryption) {

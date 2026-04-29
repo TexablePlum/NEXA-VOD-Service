@@ -24,14 +24,14 @@ builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>()
 builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
 builder.Services.AddInMemoryRateLimiting();
 
-// Response Compression (Gzip/Brotli dla JSON)
+// Response Compression
 builder.Services.AddResponseCompression(options =>
 {
     options.EnableForHttps = true;
     options.Providers.Add<BrotliCompressionProvider>();
     options.Providers.Add<GzipCompressionProvider>();
 
-    // Kompresuje tylko JSON (nie kompresuje video/audio/images z definicji są już skompresowane)
+    // Kompresuje JSON (nie kompresuje video/audio/images)
     options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[]
     {
         "application/json",
@@ -50,10 +50,10 @@ builder.Services.Configure<GzipCompressionProviderOptions>(options =>
     options.Level = CompressionLevel.Fastest;
 });
 
-// Output Caching (cache gotowych HTTP responses)
+// Output Caching
 builder.Services.AddOutputCache(options =>
 {
-    // Polityka dla catalog API - cache z możliwością iwalidacji
+    // Polityka dla catalog API
     options.AddPolicy("CatalogCache", builder =>
     {
         builder
@@ -82,7 +82,7 @@ builder.Services.AddOutputCache(options =>
     options.SizeLimit = 100 * 1024 * 1024;
 });
 
-// JWT Authentication
+// Autentykacja JWT
 // Content Server wymaga autentykacji JWT dla dostępu do streamingu
 // Używa tego samego JWT co DrmLicenseServer
 var jwtSecret = builder.Configuration["Jwt:Secret"]
@@ -157,9 +157,9 @@ builder.Services.AddCors(options =>
     options.AddPolicy("NexaClientPolicy", policy =>
     {
         policy
-            .AllowAnyOrigin()       // Zezwalaj z dowolnego origin (TODO: MVP - później zmiana)
-            .AllowAnyMethod()       // Zezwalaj GET, POST, PUT, DELETE, etc.
-            .AllowAnyHeader();      // Zezwalaj dowolne headers (Authorization, Content-Type, etc.)
+            .WithOrigins("https://nexa.player", "https://localhost")
+            .AllowAnyMethod()
+            .AllowAnyHeader();
     });
 });
 
@@ -201,7 +201,7 @@ builder.Services.AddSingleton<CatalogService>(sp =>
     var cacheDurationSeconds = builder.Configuration.GetValue<int?>("ContentStorage:CacheDurationSeconds") ?? 3600;
     var cacheDuration = TimeSpan.FromSeconds(cacheDurationSeconds);
 
-    // Pobierz IOutputCacheStore dla invalidacji cache
+    // Pobiera IOutputCacheStore dla inwalidacji cache
     var outputCacheStore = sp.GetService<IOutputCacheStore>();
 
     var service = new CatalogService(storagePath, logger, redisDb, cacheDuration, outputCacheStore);
@@ -233,7 +233,7 @@ app.UseMiddleware<ErrorHandlingMiddleware>();
 // Security Headers
 app.Use(async (context, next) =>
 {
-    // HSTS - wymusza HTTPS przez 1 rok (TYLKO dla HTTPS requests)
+    // HSTS - wymusza HTTPS przez 1 rok (tylko dla HTTPS requests)
     // Sprawdza również X-Forwarded-Proto dla reverse proxy (nginx)
     var forwardedProto = context.Request.Headers["X-Forwarded-Proto"].ToString();
     if (context.Request.IsHttps || forwardedProto.Equals("https", StringComparison.OrdinalIgnoreCase))

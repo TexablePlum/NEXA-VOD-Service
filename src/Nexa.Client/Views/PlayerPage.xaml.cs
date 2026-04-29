@@ -127,7 +127,7 @@ public sealed partial class PlayerPage : Page
             {
                 System.Diagnostics.Debug.WriteLine("PlayerPage: CoreWebView2 is null, initializing...");
                 var envOptions = new CoreWebView2EnvironmentOptions();
-                envOptions.AdditionalBrowserArguments = "--allow-running-insecure-content --autoplay-policy=no-user-gesture-required";
+                envOptions.AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required";
                 var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, null, envOptions);
                 await PlayerWebView.EnsureCoreWebView2Async(env);
             }
@@ -168,9 +168,9 @@ public sealed partial class PlayerPage : Page
                 throw new InvalidOperationException("No access token available. User must log in again.");
             }
 
-            // Construct full thumbnail URL
-            string baseUrl = Nexa.Client.Configuration.AppConfig.BaseApiUrl.TrimEnd('/');
-            string thumbnailUrl = !string.IsNullOrEmpty(_thumbnailUrl) ? $"{baseUrl}{_thumbnailUrl}" : "";
+            // thumbnailUrl and _manifestUrl are already absolute URLs from the service
+            string thumbnailUrl = _thumbnailUrl;
+            string manifestUrl = _manifestUrl;
 
             var config = new
             {

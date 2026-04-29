@@ -30,9 +30,18 @@ public class DeviceRegistrationRequest
     public string PublicKeyPem { get; set; } = string.Empty;
 
     /// <summary>
-    /// Opcjonalny TPM Attestation Quote (Base64 encoded).
-    /// Używany do weryfikacji że klucz jest w TPM.
+    /// Losowe wyzwanie (Nonce) otrzymane z serwera, zabezpieczające przed Replay Attack.
     /// </summary>
-    [MaxLength(4096)]
-    public string? TpmAttestation { get; set; }
+    [Required]
+    [MaxLength(128)]
+    public string Nonce { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Podpis kryptograficzny (RSA-SHA256) wygenerowany kluczem prywatnym urządzenia.
+    /// Dane podpisywane: "DeviceId|Nonce".
+    /// Potwierdza rzeczywiste posiadanie zgłaszanego klucza.
+    /// </summary>
+    [Required]
+    [MaxLength(1024)]
+    public string SignatureBase64 { get; set; } = string.Empty;
 }
